@@ -1,0 +1,8834 @@
+﻿/**
+ * @file wpe_hook.cpp
+ * @brief WPE网络封包拦截模块实现
+ * 
+ * 实现 Windows Socket API 的 Hook，拦截游戏网络封包
+ */
+
+#include <windows.h>
+#include <winhttp.h>
+#include <wincrypt.h>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <iomanip>
+#include <memory>
+#include <tuple>
+#include <algorithm>
+#include <map>
+#include <unordered_map>
+#include <fstream>
+#include <cstdarg>
+#include <thread>
+#include <queue>
+
+// 第三方库
+#include <MemoryModule.h>
+#include <MinHook.h>
+
+// 项目头文件
+#include "wpe_hook.h"
+#include "utils.h"
+#include "packet_parser.h"
+#include "packet_builder.h"
+#include "data_interceptor.h"
+#include "ui_bridge.h"
+
+// 嵌入资源
+#include "embedded/minhook_data.h"
+
+// 外部变量声明（来自 packet_parser.cpp）
+extern std::unordered_map<int, std::wstring> g_skillNames;
+extern std::unordered_map<int, int> g_skillPowers;
+
+// MinHook 宏定义
+#ifndef MH_ALL_HOOKS
+#define MH_ALL_HOOKS (nullptr)
+#endif
+
+// ============================================================================
+// 前向声明
+// ============================================================================
+
+struct ICoreWebView2;
+extern ICoreWebView2* g_webview;
+
+// 前向声明
+void ProcessMD5CheckAndReply(const std::vector<BYTE>& body, uint32_t params);
+
+// ============================================================================
+// 内部命名空间 - 封装实现细节
+// ============================================================================
+
+namespace {
+
+// -------------------------
+// Opcode 常量（内部使用）
+// -------------------------
+
+// 需要阻止发送的 Opcode（灵玉分解过程中）
+constexpr uint32_t BLOCKED_OPCODE_QUERY_1 = 1185792;
+constexpr uint32_t BLOCKED_OPCODE_QUERY_2 = 1185809;
+
+// -------------------------
+// 默认屏蔽的封包（无条件屏蔽，无需用户勾选）
+// -------------------------
+
+/**
+ * @brief 默认屏蔽的封包结构
+ * 用于匹配需要无条件屏蔽的封包
+ */
+struct DefaultBlockedPacket {
+    uint32_t opcode;        ///< Opcode（必须匹配）
+    uint32_t params;        ///< Params（0xFFFFFFFF 表示匹配任意值）
+    const BYTE* bodyPrefix; ///< Body 前缀匹配（nullptr 表示不匹配 Body）
+    size_t bodyPrefixLen;   ///< Body 前缀长度
+};
+
+// 默认屏蔽的 Opcode 列表（仅匹配 Opcode）
+constexpr uint32_t DEFAULT_BLOCKED_OPCODES[] = {
+    1311544,  // 38111400 小端序
+    1314916,  // 64161400 小端序
+    1311499,  // 0B111400 小端序
+};
+
+// 默认屏蔽的完整封包（需要匹配 Opcode + Params，可选匹配 Body）
+// 封包1: 44531000021314000100000004000000000000000100000000000000
+//   Opcode: 1314050, Params: 1, Body: 04 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00
+static const BYTE g_blockBodyPrefix1[] = { 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+// 封包2: 44530400001014000500000000000000
+//   Opcode: 1312768, Params: 5, Body: 空
+
+// 默认屏蔽封包列表
+static const DefaultBlockedPacket g_defaultBlockedPackets[] = {
+    { 1314050, 1, g_blockBodyPrefix1, sizeof(g_blockBodyPrefix1) },  // 匹配完整封包1
+    { 1312768, 5, nullptr, 0 },  // 匹配完整封包2
+};
+
+/**
+ * @brief 检查封包是否在默认屏蔽列表中
+ * @param opcode 封包 Opcode
+ * @param params 封包 Params
+ * @param body 封包 Body 数据
+ * @param bodyLen Body 长度
+ * @return true 表示应该屏蔽
+ */
+inline bool IsDefaultBlockedPacket(uint32_t opcode, uint32_t params, 
+                                    const BYTE* body, size_t bodyLen) {
+    // 1. 检查是否在默认屏蔽 Opcode 列表中
+    for (uint32_t blockedOp : DEFAULT_BLOCKED_OPCODES) {
+        if (opcode == blockedOp) {
+            return true;
+        }
+    }
+    
+    // 2. 检查是否匹配完整的默认屏蔽封包
+    for (const auto& blocked : g_defaultBlockedPackets) {
+        // 匹配 Opcode
+        if (opcode != blocked.opcode) continue;
+        
+        // 匹配 Params（0xFFFFFFFF 表示任意值）
+        if (blocked.params != 0xFFFFFFFF && params != blocked.params) continue;
+        
+        // 匹配 Body 前缀（如果有）
+        if (blocked.bodyPrefix != nullptr && blocked.bodyPrefixLen > 0) {
+            if (bodyLen < blocked.bodyPrefixLen) continue;
+            if (memcmp(body, blocked.bodyPrefix, blocked.bodyPrefixLen) != 0) continue;
+        }
+        
+        return true;
+    }
+    
+    return false;
+}
+
+// -------------------------
+// 临界区管理（RAII）
+// -------------------------
+
+CriticalSectionScope g_packetListCS;       ///< 封包列表临界区
+CriticalSectionScope g_pendingPacketsCS;   ///< 暂存封包临界区
+
+// -------------------------
+// 全局状态
+// -------------------------
+
+EXECUTE_SCRIPT_FUNC g_ExecuteScriptFunc = nullptr;  ///< JS执行函数指针
+bool g_bInitialized = false;                         ///< 初始化标志
+
+// 封包列表
+std::vector<PACKET> g_PacketList;
+std::vector<std::tuple<BOOL, std::vector<BYTE>, DWORD, DWORD>> g_PendingPackets;
+
+// 拦截设置
+bool g_bInterceptSend = true;     ///< 是否拦截发送包
+bool g_bInterceptRecv = false;    ///< 是否拦截接收包
+bool g_bInterceptEnabled = false; ///< 是否启用拦截
+
+// 网络状态
+SOCKET g_LastGameSocket = 0;      ///< 最近的游戏套接字
+bool g_blockOpcodeSend = false;   ///< 是否阻止特定Opcode发送
+
+// 劫持功能
+bool g_bHijackEnabled = false;    ///< 是否启用劫持功能
+std::vector<HijackRule> g_HijackRules;  ///< 劫持规则列表
+CriticalSectionScope g_hijackRulesCS;   ///< 劫持规则临界区
+
+// 自动发送状态
+bool g_bAutoSendEnabled = false;  ///< 是否启用自动发送
+volatile bool g_bStopAutoSend = false;  ///< 停止自动发送标志
+
+// 采摘红莓果状态 (Act788)
+static int g_strawberryPlayCount = 0;        // 剩余游戏次数
+static int g_strawberryRestTime = 0;         // 冷却时间
+static int g_strawberryCheckCode = 0;        // 校验码
+static int g_strawberryRuleFlag = 0;         // 规则标志
+static int g_strawberryRedBerryCount = 0;    // 红莓果数量
+static bool g_strawberryWaitingResponse = false;  // 等待响应
+static bool g_strawberryUseSweep = false;    // 是否使用扫荡功能
+static std::vector<int> g_strawberryAwardArr;  // 奖励物品列表 (73个)
+static std::vector<int> g_strawberryToolArr;   // 道具列表 (30个)
+static int g_strawberryAwardType = 0;          // 奖励类型
+
+// -------------------------
+// 调试日志函数
+// -------------------------
+
+/**
+ * @brief 跳舞大赛调试日志函数
+ * @param format 格式化字符串
+ * @param ... 可变参数
+ */
+inline void LogDance(const char* format, ...) {
+#ifdef _DEBUG
+    // 跳舞大赛调试日志（已禁用，使用 WebView2 控制台输出）
+    // 如需启用，可以使用 PostMessage 发送到 WebView2 控制台
+#endif
+}
+
+}  // anonymous namespace
+
+// ============================================================================
+// 导出全局变量（在头文件中声明为 extern）
+// ============================================================================
+
+std::atomic<uint32_t> g_userId{0};  ///< 卡布号（从进入世界封包获取）
+
+// 注意：g_hWnd 在 demo.cpp 中定义，这里通过 wpe_hook.h 的 extern 声明使用
+
+std::atomic<bool> g_autoHeal{false};  ///< 自动回血
+
+std::atomic<bool> g_blockBattle{false};  ///< 屏蔽战斗
+std::atomic<bool> g_autoGoHome{false};   ///< 自动回家（玄塔）
+std::atomic<int32_t> g_battleCounter{0};  ///< 战斗counter（用于战斗校验）
+std::atomic<bool> g_battleStarted{false};  ///< 是否已进入战斗
+
+std::atomic<int> g_md5CheckIndex{0};  ///< MD5验证自动回复索引（-1=禁用，0-3=有效，99=测试）
+
+std::atomic<bool> g_collectFinished{false};  ///< 采集完成标志
+std::atomic<bool> g_collectAutoMode{false};  ///< 一键采集模式
+std::atomic<int> g_collectStatus{0};  ///< 采集状态
+
+// 福瑞宝箱状态变量
+std::atomic<bool> g_heavenFuruiRunning{false};
+std::atomic<bool> g_heavenFuruiQuerySuccess{false};
+std::atomic<int> g_heavenFuruiBoxCount{0};
+std::atomic<bool> g_heavenFuruiEnteredMap{false};
+std::atomic<int> g_heavenFuruiMaxBoxes{30};  ///< 最大开启宝箱数量
+std::atomic<int> g_heavenFuruiOpenedBoxes{0};  ///< 已开启宝箱数量
+
+// 背包物品位置映射（物品ID -> 位置索引）
+std::map<uint32_t, uint32_t> g_itemPositionMap;
+// 背包物品列表
+std::vector<PackItemInfo> g_packItems;
+
+// 万妖盛会状态变量
+BattleSixAutoBattle g_battleSixAuto;
+std::atomic<bool> g_battleSixMatching{false};  ///< 是否正在匹配
+std::atomic<bool> g_battleSixMatchSuccess{false};  ///< 匹配是否成功
+std::atomic<int> g_battleSixSwitchTargetId{-1};  ///< 切换目标精灵uniqueId
+std::atomic<int> g_battleSixSwitchRetryCount{0};  ///< 切换重试次数
+
+// 登录 Key 提取变量（从 OP_CLIENT_CHECK_ACCOUNT 封包）
+std::wstring g_loginKey;                     ///< 整个封包的十六进制字符串（大写）
+std::atomic<bool> g_loginKeyCaptured{false}; ///< 是否已捕获登录 key
+
+namespace {
+
+// -------------------------
+// 跳舞大赛状态
+// -------------------------
+
+struct DanceGameState {
+    int processId = 0;           ///< 当前跳舞进程ID
+    int serverTime = 0;          ///< 服务器时间
+    int serverDifficulty = 5;    ///< 服务器难度
+    int todayRewardCnt = 0;      ///< 今日已获得奖励次数
+    int drawRewardCnt = 0;       ///< 抽奖次数
+    int serverScore = 0;         ///< 服务器分数
+    int remainCnt = 3;           ///< 剩余次数
+    int gameState = 0;           ///< 游戏状态：0=未开始，2=游戏中
+    int clothNum = 0;            ///< 跳舞服装加成
+    int counter = 0;             ///< 跳舞计数
+    bool waitingResponse = false;///< 等待响应
+    bool enteredMap = false;     ///< 是否已进入地图
+};
+
+static DanceGameState g_danceState;
+
+// -------------------------
+// 深度挖宝状态
+// -------------------------
+
+struct DeepDigState {
+    int sessionId = 0;           ///< 会话ID
+    int remainingCount = 0;      ///< 剩余次数
+    int targetCount = 0;         ///< 目标执行次数
+    int completedCount = 0;      ///< 已完成次数
+    bool waitingResponse = false;///< 等待开始响应
+    bool waitingQuery = false;   ///< 等待查询响应
+    bool autoMode = false;       ///< 自动循环模式
+};
+
+static DeepDigState g_deepDigState;
+
+// -------------------------
+// 回调函数
+// -------------------------
+
+PACKET_CALLBACK g_PacketCallback = nullptr;
+
+// -------------------------
+// 辅助函数
+// -------------------------
+
+/**
+ * @brief 检查是否为游戏封包
+ */
+inline bool IsGamePacket(const BYTE* pData, DWORD dwSize) {
+    if (!pData || dwSize < 2) return false;
+    uint16_t magic = static_cast<uint16_t>(pData[0]) | 
+                     (static_cast<uint16_t>(pData[1]) << 8);
+    return (magic == PacketProtocol::MAGIC_NORMAL || 
+            magic == PacketProtocol::MAGIC_COMPRESSED);
+}
+
+/**
+ * @brief 检查是否应该阻止该封包的发送
+ */
+inline bool ShouldBlockPacketSend(const BYTE* pData, DWORD dwSize) {
+    if (!g_blockOpcodeSend || dwSize < PacketProtocol::HEADER_SIZE) {
+        return false;
+    }
+    
+    // 读取 Opcode（小端序，偏移4）
+    uint32_t opcode = static_cast<uint32_t>(pData[4]) | 
+                      (static_cast<uint32_t>(pData[5]) << 8) |
+                      (static_cast<uint32_t>(pData[6]) << 16) |
+                      (static_cast<uint32_t>(pData[7]) << 24);
+    
+    return (opcode == BLOCKED_OPCODE_QUERY_1 || opcode == BLOCKED_OPCODE_QUERY_2);
+}
+
+/**
+ * @brief 从封包数据读取 Opcode
+ */
+inline uint32_t ReadOpcode(const BYTE* pData) {
+    return static_cast<uint32_t>(pData[4]) | 
+           (static_cast<uint32_t>(pData[5]) << 8) |
+           (static_cast<uint32_t>(pData[6]) << 16) |
+           (static_cast<uint32_t>(pData[7]) << 24);
+}
+
+/**
+ * @brief 从封包数据读取 Params
+ */
+inline uint32_t ReadParams(const BYTE* pData) {
+    return static_cast<uint32_t>(pData[8]) | 
+           (static_cast<uint32_t>(pData[9]) << 8) |
+           (static_cast<uint32_t>(pData[10]) << 16) |
+           (static_cast<uint32_t>(pData[11]) << 24);
+}
+
+/**
+ * @brief 从封包数据读取 Body 长度
+ */
+inline uint16_t ReadBodyLength(const BYTE* pData) {
+    return static_cast<uint16_t>(pData[2]) | 
+           (static_cast<uint16_t>(pData[3]) << 8);
+}
+
+}  // anonymous namespace
+
+// ============================================================================
+// 玄塔活动临界区（在匿名命名空间外）
+// ============================================================================
+
+static CRITICAL_SECTION g_towerCS;  // 玄塔临界区
+
+// 玄塔活动全局变量
+static bool g_towerAutoMode = false;        // 自动模式
+static int g_towerDiceCount = 0;            // 实际骰子数量
+static int g_towerRemainingDice = 0;       // 剩余骰子数
+static bool g_towerMapEntered = false;     // 是否已进入地图
+static bool g_towerBattleStarted = false;  // 是否已开始战斗
+static bool g_towerResultReceived = false; // 是否收到查询结果响应
+static bool g_towerWaitingResponse = false; // 等待响应
+static HANDLE g_towerThread = nullptr;      // 玄塔线程句柄
+
+// 投掷骰子结果追踪
+static bool g_towerThrowResponseReceived = false;  // 是否收到投掷响应
+static bool g_towerLastThrowSuccess = false;       // 最后一次投掷是否成功
+static int g_towerLastThrowStep = 0;               // 最后一次投掷步数
+static int g_towerLastThrowNodeType = 0;           // 最后一次投掷节点类型
+
+// CHECK_INFO 响应追踪
+static bool g_towerCheckInfoReceived = false;      // 是否收到CHECK_INFO响应
+static int g_towerCheckInfoNbones = 0;             // CHECK_INFO返回的普通骰子数
+static int g_towerPassFlag = 0;                    // 通关标志（0=未通关，1=已通关）
+static bool g_towerIsCompleted = false;            // 玄塔是否已完成（nodetype==8）
+
+// BUY_BONES 响应追踪
+static bool g_towerBuyBonesReceived = false;       // 是否收到BUY_BONES响应
+static bool g_towerBuyBonesSuccess = false;        // 购买是否成功
+static int g_towerBuyBonesNum = 0;                 // 购买后的骰子数量
+
+// ============================================================================
+// 初始化与清理
+// ============================================================================
+
+void SetExecuteScriptFunction(EXECUTE_SCRIPT_FUNC func) {
+    g_ExecuteScriptFunc = func;
+}
+
+BOOL InitializeWpeHook() {
+    if (g_bInitialized) {
+        return TRUE;
+    }
+
+    // 初始化玄塔临界区
+    InitializeCriticalSection(&g_towerCS);
+
+    // 初始化解析器
+    if (!PacketParser::Initialize()) {
+        DeleteCriticalSection(&g_towerCS);
+        return FALSE;
+    }
+
+    // 初始化响应处理器
+    ResponseDispatcher::Instance().InitializeDefaultHandlers();
+
+    g_bInitialized = true;
+    return TRUE;
+}
+
+VOID CleanupWpeHook() {
+    if (!g_bInitialized) return;
+
+    // 停止拦截并标记为未初始化
+    g_bInterceptEnabled = false;
+    g_bInitialized = false;
+    
+    // 停止脚本执行回调
+    SetExecuteScriptFunction(nullptr);
+    
+    // TODO: 任务执行器关闭（待完善）
+    // TaskExecutor::Instance().Shutdown();
+    
+    // 等待可能的 Hook 函数退出
+    Sleep(10);
+    
+    // 清理封包数据
+    {
+        CriticalSectionLock lock(g_packetListCS.Get());
+        for (auto& packet : g_PacketList) {
+            delete[] packet.pData;
+            packet.pData = nullptr;
+        }
+        g_PacketList.clear();
+    }
+    
+    {
+        CriticalSectionLock lock(g_pendingPacketsCS.Get());
+        g_PendingPackets.clear();
+    }
+
+    // 清理玄塔临界区
+    DeleteCriticalSection(&g_towerCS);
+
+    // 清理解析器
+    PacketParser::Cleanup();
+}
+
+// ============================================================================
+// 原始函数指针
+// ============================================================================
+
+typedef int (WINAPI* SEND_FUNC)(SOCKET s, const char* buf, int len, int flags);
+typedef int (WINAPI* RECV_FUNC)(SOCKET s, char* buf, int len, int flags);
+
+SEND_FUNC OriginalSend = nullptr;
+RECV_FUNC OriginalRecv = nullptr;
+
+// ============================================================================
+// MinHook 函数指针
+// ============================================================================
+
+typedef MH_STATUS(WINAPI* PFN_MH_INITIALIZE)(void);
+typedef MH_STATUS(WINAPI* PFN_MH_UNINITIALIZE)(void);
+typedef MH_STATUS(WINAPI* PFN_MH_CREATEHOOK)(LPVOID pTarget, LPVOID pDetour, LPVOID* ppOriginal);
+typedef MH_STATUS(WINAPI* PFN_MH_ENABLEHOOK)(LPVOID pTarget);
+typedef MH_STATUS(WINAPI* PFN_MH_DISABLEHOOK)(LPVOID pTarget);
+
+PFN_MH_INITIALIZE g_pfnMH_Initialize = nullptr;
+PFN_MH_UNINITIALIZE g_pfnMH_Uninitialize = nullptr;
+PFN_MH_CREATEHOOK g_pfnMH_CreateHook = nullptr;
+PFN_MH_ENABLEHOOK g_pfnMH_EnableHook = nullptr;
+PFN_MH_DISABLEHOOK g_pfnMH_DisableHook = nullptr;
+
+// ============================================================================
+// MinHook 内存加载
+// ============================================================================
+
+namespace {
+
+HMEMORYMODULE g_hMinHookModule = nullptr;
+
+BOOL LoadMinHookFromMemory() {
+    g_hMinHookModule = MemoryLoadLibrary(g_minhook_x64Data, g_minhook_x64Size);
+    if (!g_hMinHookModule) {
+        return FALSE;
+    }
+    
+    // 获取函数指针
+    g_pfnMH_Initialize = (PFN_MH_INITIALIZE)MemoryGetProcAddress(g_hMinHookModule, "MH_Initialize");
+    g_pfnMH_Uninitialize = (PFN_MH_UNINITIALIZE)MemoryGetProcAddress(g_hMinHookModule, "MH_Uninitialize");
+    g_pfnMH_CreateHook = (PFN_MH_CREATEHOOK)MemoryGetProcAddress(g_hMinHookModule, "MH_CreateHook");
+    g_pfnMH_EnableHook = (PFN_MH_ENABLEHOOK)MemoryGetProcAddress(g_hMinHookModule, "MH_EnableHook");
+    g_pfnMH_DisableHook = (PFN_MH_DISABLEHOOK)MemoryGetProcAddress(g_hMinHookModule, "MH_DisableHook");
+    
+    // 验证所有函数指针
+    if (!g_pfnMH_Initialize || !g_pfnMH_Uninitialize || !g_pfnMH_CreateHook || 
+        !g_pfnMH_EnableHook || !g_pfnMH_DisableHook) {
+        MemoryFreeLibrary(g_hMinHookModule);
+        g_hMinHookModule = nullptr;
+        return FALSE;
+    }
+    
+    return TRUE;
+}
+
+VOID UnloadMinHookFromMemory() {
+    if (g_hMinHookModule) {
+        MemoryFreeLibrary(g_hMinHookModule);
+        g_hMinHookModule = nullptr;
+        
+        g_pfnMH_Initialize = nullptr;
+        g_pfnMH_Uninitialize = nullptr;
+        g_pfnMH_CreateHook = nullptr;
+        g_pfnMH_EnableHook = nullptr;
+        g_pfnMH_DisableHook = nullptr;
+    }
+}
+
+}  // namespace
+
+// ============================================================================
+// 道具功能实现
+// ============================================================================
+
+/**
+ * @brief 请求背包数据
+ * @param packType 包类型 (0xFFFFFFFF = 全部)
+ * @return 发送是否成功
+ */
+BOOL SendReqPackageDataPacket(uint32_t packType) {
+    // 封包格式: Opcode=1183761, Params=packType, Body=空
+    std::vector<uint8_t> packet = PacketBuilder()
+        .SetOpcode(Opcode::REQ_PACKAGE_DATA_SEND)
+        .SetParams(packType)
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+/**
+ * @brief 处理背包数据响应
+ * @param packet 封包数据
+ */
+void ProcessPackageDataResponse(const GamePacket& packet) {
+    if (packet.body.size() < 8) {
+        UIBridge::Instance().UpdateHelperText(L"背包数据响应格式错误");
+        return;
+    }
+    
+    const BYTE* body = packet.body.data();
+    size_t offset = 0;
+    size_t bodySize = packet.body.size();
+    
+    // 读取 isocode
+    int isocode = ReadInt32LE(body, offset);
+    
+    // 读取 packcount（包数量）
+    int packcount = ReadInt32LE(body, offset);
+    
+    // 清空之前的物品映射
+    g_itemPositionMap.clear();
+    g_packItems.clear();
+    
+    // 遍历每个包
+    for (int i = 0; i < packcount; i++) {
+        // 检查是否有足够的空间读取 packcode, packid, count (共12字节)
+        if (offset + 12 > bodySize) break;
+        
+        int packcode = ReadInt32LE(body, offset);
+        int packid = ReadInt32LE(body, offset);
+        int count = ReadInt32LE(body, offset);
+        
+        // 遍历包内物品
+        for (int j = 0; j < count; j++) {
+            // 检查是否有足够的空间读取 position 和 id (共8字节)
+            if (offset + 8 > bodySize) break;
+            
+            PackItemInfo item;
+            item.packcode = packcode;
+            item.position = ReadInt32LE(body, offset);
+            item.id = ReadInt32LE(body, offset);
+            
+            if (item.id > 0) {
+                // 检查是否有足够的空间读取 count (4字节)
+                if (offset + 4 > bodySize) break;
+                
+                item.count = ReadInt32LE(body, offset);
+                
+                // 保存到列表
+                g_packItems.push_back(item);
+                
+                // 建立ID -> position映射
+                g_itemPositionMap[item.id] = item.position;
+            }
+        }
+    }
+    
+    // 更新UI
+    wchar_t msg[128];
+    swprintf_s(msg, L"背包数据已更新，共 %zu 个物品", g_packItems.size());
+    UIBridge::Instance().UpdateHelperText(msg);
+}
+
+/**
+ * @brief 购买道具
+ * @param itemId 道具ID
+ * @param count 购买数量
+ * @return 发送是否成功
+ * @note 封包格式: Opcode=1183760, Params=itemId, Body=[count]
+ */
+BOOL SendBuyGoodsPacket(uint32_t itemId, uint32_t count) {
+    // 封包格式: Opcode=1183760, Params=itemId, Body=[count]
+    std::vector<uint8_t> packet = PacketBuilder()
+        .SetOpcode(Opcode::BUY_GOODS_SEND)
+        .SetParams(itemId)
+        .WriteUInt32(count)
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+/**
+ * @brief 使用道具（战斗中）
+ * @param itemId 道具ID
+ * @param position 物品位置索引（如果为0则从映射表查找）
+ * @return 发送是否成功
+ * @note 封包格式: Opcode=1186050, Params=2, Body=[packcode=1, position, sid=1]
+ */
+BOOL SendUseItemInBattlePacket(uint32_t itemId, uint32_t position) {
+    // 如果未指定位置，从映射表中查找
+    if (position == 0) {
+        auto it = g_itemPositionMap.find(itemId);
+        if (it == g_itemPositionMap.end()) {
+            return FALSE;
+        }
+        position = it->second;
+    }
+    
+    // 封包格式: Opcode=1186050, Params=2, Body=[packcode, position, sid]
+    // packcode = 1 (道具背包), sid = 1 (玩家角色)
+    std::vector<uint8_t> packet = PacketBuilder()
+        .SetOpcode(Opcode::USER_OP_SEND)
+        .SetParams(2)
+        .WriteUInt32(1)        // packcode = 1
+        .WriteUInt32(position) // position
+        .WriteUInt32(1)        // sid = 1
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+/**
+ * @brief 使用道具（通用，非战斗）
+ * @param itemId 道具ID
+ * @param spiritId 妖怪ID
+ * @param param1 参数1
+ * @param param2 参数2
+ * @param param3 参数3
+ * @return 发送是否成功
+ * @note 封包格式: Opcode=1184310, Params=itemId, Body=[spiritId, param1, param2, param3]
+ */
+BOOL SendUsePropsPacket(uint32_t itemId, uint32_t spiritId, 
+                        uint32_t param1, uint32_t param2, uint32_t param3) {
+    // 封包格式: Opcode=1184310, Params=itemId, Body=[spiritId, param1, param2, param3]
+    std::vector<uint8_t> packet = PacketBuilder()
+        .SetOpcode(Opcode::USE_PROPS_SEND)
+        .SetParams(itemId)
+        .WriteUInt32(spiritId)
+        .WriteUInt32(param1)
+        .WriteUInt32(param2)
+        .WriteUInt32(param3)
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+/**
+ * @brief 获取道具名称
+ * @param itemId 道具ID
+ * @return 道具名称
+ */
+std::wstring GetItemName(uint32_t itemId) {
+    static const std::map<uint32_t, std::wstring> itemNames = {
+        {100005, L"蟠桃"},
+        {100006, L"大金创药"},
+        {100007, L"中金创药"},
+        {100008, L"小金创药"},
+        {100009, L"天仙玉露"},
+        {100010, L"小型法力药剂"},
+        {100011, L"中型法力药剂"},
+        {100012, L"大型法力药剂"},
+        {100031, L"活血散"},
+        {100034, L"天香丸"},
+    };
+    
+    auto it = itemNames.find(itemId);
+    if (it != itemNames.end()) {
+        return it->second;
+    }
+    
+    return std::to_wstring(itemId);
+}
+
+/**
+ * @brief 获取道具价格
+ * @param itemId 道具ID
+ * @return 道具价格
+ */
+uint32_t GetItemPrice(uint32_t itemId) {
+    static const std::map<uint32_t, uint32_t> itemPrices = {
+        {100006, 120},   // 大金创药
+        {100007, 50},    // 中金创药
+        {100008, 20},    // 小金创药
+        {100010, 100},   // 小型法力药剂
+        {100011, 150},   // 中型法力药剂
+        {100012, 200},   // 大型法力药剂
+        {100031, 350},   // 活血散
+    };
+    
+    auto it = itemPrices.find(itemId);
+    if (it != itemPrices.end()) {
+        return it->second;
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief 获取物品位置
+ * @param itemId 物品ID
+ * @return 物品位置索引
+ */
+uint32_t GetItemPosition(uint32_t itemId) {
+    auto it = g_itemPositionMap.find(itemId);
+    if (it != g_itemPositionMap.end()) {
+        return it->second;
+    }
+    return 0;
+}
+
+// ============ 屠苏祝百寿功能实现 (Act643) ============
+
+// 使用新的状态管理器（逐步迁移中）
+// 辅助宏简化访问
+#define ACT643_STATE ActivityStateManager::Instance().GetAct643State()
+
+/**
+ * @brief 构造Act643封包
+ */
+static std::vector<BYTE> BuildAct643Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {}) {
+    return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act643::ACTIVITY_ID, operation, bodyValues);
+}
+
+BOOL SendAct643Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+    std::vector<BYTE> packet = BuildAct643Packet(operation, bodyValues);
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()),
+                      Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+}
+
+BOOL SendAct643GameInfoPacket() {
+    ACT643_STATE.waitingResponse = true;
+    return SendAct643Packet("open_ui");
+}
+
+BOOL SendAct643StartGamePacket() {
+    ACT643_STATE.waitingResponse = true;
+    return SendAct643Packet("chicken_start");
+}
+    
+    // 游戏过程中接住食物的封包
+    BOOL SendAct643GamingPacket(int opType) {
+        // 校验码: checkCode * (userId % 1000) * (msgCount + 1)
+        int clientCheckCode = ACT643_STATE.checkCode.load() * (g_userId % 1000) * (ACT643_STATE.msgCount.load() + 1);
+        ACT643_STATE.msgCount++;  // 每次gaming后msgCount递增
+        return SendAct643Packet("chicken_gaming", {opType, ACT643_STATE.msgCount.load(), clientCheckCode});
+    }
+    
+    // 游戏结束封包只需要isPass参数，不需要校验码
+    BOOL SendAct643EndGamePacket(int isPass) {
+        return SendAct643Packet("chicken_end", {isPass});
+    }
+    
+    BOOL SendAct643SweepInfoPacket() {
+        ACT643_STATE.waitingResponse = true;
+        return SendAct643Packet("sweep_info");
+    }
+    
+    BOOL SendAct643SweepPacket() {
+        ACT643_STATE.waitingResponse = true;
+        return SendAct643Packet("sweep");
+    }
+    
+    // 扫荡是否成功的标志
+    static bool g_act643SweepSuccess = false;
+    
+    DWORD WINAPI Act643ThreadProc(LPVOID lpParam) {
+        Sleep(300);
+        
+        UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：正在获取游戏信息...");
+        
+        SendAct643GameInfoPacket();
+        for (int i = 0; i < 30 && ACT643_STATE.waitingResponse.load(); i++) Sleep(100);
+        
+        if (ACT643_STATE.playCount.load() <= 0) {
+            UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：今日次数已用完");
+            return 0;
+        }
+        
+        if (ACT643_STATE.restTime.load() > 0) {
+            UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：冷却中，请稍后再试");
+            return 0;
+        }
+        
+        // 尝试扫荡（用户勾选扫荡复选框时直接执行，由服务器判断是否可扫荡）
+        if (ACT643_STATE.useSweep.load()) {
+            UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：正在获取扫荡信息...");
+            
+            Sleep(300);
+            ACT643_STATE.isRunning = false;  // 用作临时标志
+            SendAct643SweepInfoPacket();
+            for (int i = 0; i < 30 && ACT643_STATE.waitingResponse.load(); i++) Sleep(100);
+            
+            // 检查扫荡信息是否成功（需要查看响应处理）
+            // 扫荡失败，需要重新游戏
+            UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：扫荡条件不满足，开始游戏...");
+        }
+        
+        // 需要完成一局游戏
+        UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：开始游戏...");
+        
+        Sleep(300);
+        SendAct643StartGamePacket();
+        for (int i = 0; i < 30 && ACT643_STATE.waitingResponse.load(); i++) Sleep(100);
+        
+        // 模拟游戏过程：发送多次 gaming 封包接住食物（最高分40）
+        DWORD lastSendTime = GetTickCount();
+        const DWORD minInterval = 100;  // 最小发送间隔100ms
+        
+        for (int i = 0; i < Act643::MAX_SCORE; i++) {
+            // 每10次更新一次进度提示
+            if (i % 10 == 0 || i == Act643::MAX_SCORE - 1) {
+                wchar_t msg[128];
+                swprintf_s(msg, L"屠苏祝百寿：游戏进行中... 进度 %d/%d", i + 1, Act643::MAX_SCORE);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+            SendAct643GamingPacket(1);  // opType=1 表示接住食物
+            
+            // 智能延迟：计算距离上次发送的时间
+            DWORD now = GetTickCount();
+            DWORD elapsed = now - lastSendTime;
+            if (elapsed < minInterval) {
+                Sleep(minInterval - elapsed);
+            }
+            lastSendTime = GetTickCount();
+        }
+        
+        Sleep(300);
+        SendAct643EndGamePacket(1);  // isPass=1 表示通关
+        UIBridge::Instance().UpdateHelperText(L"屠苏祝百寿：游戏完成，获得最高分40分！");
+        return 0;
+    }
+    
+    BOOL SendOneKeyAct643Packet(bool useSweep) {
+        ACT643_STATE.useSweep = useSweep;  // 设置扫荡选项
+        HANDLE hThread = CreateThread(nullptr, 0, Act643ThreadProc, nullptr, 0, nullptr);
+        if (hThread) { CloseHandle(hThread); return TRUE; }
+        return FALSE;
+    }
+    
+    void ProcessAct643Response(const GamePacket& packet) {
+        if (packet.body.size() < 2) return;
+        const BYTE* body = packet.body.data();
+        size_t offset = 0;
+        
+        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
+        offset += 2;
+        if (offset + strLen > packet.body.size()) return;
+        
+        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
+        offset += strLen;
+        
+        ACT643_STATE.waitingResponse = false;
+        
+        if (operation == "open_ui") {
+            // AS3 格式: playCount(4) + restTime(4) + chickenCount(4) + clearStageCount(4) +
+            //          rewardList[4](16) + getRewardList[4](16) + historyBestScore(4) +
+            //          catchId(4) + catchList[2](8) = 64字节
+            if (offset + 64 <= packet.body.size()) {
+                ACT643_STATE.playCount = ReadInt32LE(body, offset);   // playCount
+                ACT643_STATE.restTime = ReadInt32LE(body, offset);    // restTime
+                offset += 4;  // chickenCount (不使用)
+                offset += 4;  // clearStageCount (不使用)
+                offset += 16; // rewardList[4] (不使用)
+                offset += 16; // getRewardList[4] (不使用)
+                ACT643_STATE.bestScore = ReadInt32LE(body, offset);   // historyBestScore
+                ACT643_STATE.sweepAvailable = (ACT643_STATE.bestScore.load() > 0);
+                // catchId 和 catchList 不需要解析
+            }
+        }
+        else if (operation == "chicken_start") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result == 0 && offset + 12 <= packet.body.size()) {
+                    ACT643_STATE.playCount = ReadInt32LE(body, offset);
+                    ACT643_STATE.checkCode = ReadInt32LE(body, offset);
+                    ACT643_STATE.msgCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+        else if (operation == "chicken_end") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result == 0 && offset + 8 <= packet.body.size()) {
+                    ACT643_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+        else if (operation == "sweep_info") {
+            // sweep_info 成功条件：result == 0
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                // 临时使用 isRunning 作为 sweep 成功标志
+                ACT643_STATE.isRunning = (result == 0);
+            }
+        }
+        else if (operation == "sweep") {
+            // sweep 没有result字段，总是成功
+            ACT643_STATE.isRunning = true;
+            if (offset + 4 <= packet.body.size()) {
+                int resultType = ReadInt32LE(body, offset);  // 类型标识，不是成功/失败
+                if (offset + 8 <= packet.body.size()) {
+                    ACT643_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+    }
+    
+    // ============ 宝盆纳万财功能实现 (Act768) ============
+    
+    // 使用新的状态管理器
+    #define ACT768_STATE ActivityStateManager::Instance().GetAct768State()
+    
+    // 兼容旧代码的静态变量映射到状态管理器
+    static bool g_act768SweepSuccess = false;  // 仅用于sweep_success标志
+    
+    static std::vector<BYTE> BuildAct768Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+        return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act768::ACTIVITY_ID, operation, bodyValues);
+    }
+    
+    BOOL SendAct768Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+        std::vector<BYTE> packet = BuildAct768Packet(operation, bodyValues);
+        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), 
+                          Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+    }
+    
+    BOOL SendAct768GameInfoPacket() {
+        ACT768_STATE.waitingResponse = true;
+        return SendAct768Packet("open_ui");
+    }
+    
+    BOOL SendAct768StartGamePacket() {
+        ACT768_STATE.waitingResponse = true;
+        return SendAct768Packet("start_game");
+    }
+    
+    BOOL SendAct768GameHitPacket(int type, int index, int awardId) {
+        // 校验码: (random 1000-1999) * (checkCode + index) + 9241
+        // type=1: 接奖励物品，使用 index 参数
+        // type=2: 接礼物，不使用 index
+        int random_part = (rand() % 1000) + 1000;
+        int checkCode = random_part * (ACT768_STATE.checkCode + (type == 1 ? index : 0)) + 9241;
+        return SendAct768Packet("game_hit", {checkCode, type, index, awardId});
+    }
+    
+    BOOL SendAct768EndGamePacket() {
+        // 校验码: checkCode & (userId % checkCode)
+        // end_game 只需要 checkCode，不需要 score
+        int clientCheckCode = ACT768_STATE.checkCode & (g_userId % ACT768_STATE.checkCode);
+        return SendAct768Packet("end_game", {clientCheckCode});
+    }
+    
+    BOOL SendAct768SweepInfoPacket() {
+        ACT768_STATE.waitingResponse = true;
+        return SendAct768Packet("sweep_info");
+    }
+    
+    BOOL SendAct768SweepPacket() {
+        ACT768_STATE.waitingResponse = true;
+        return SendAct768Packet("sweep");
+    }
+    
+    DWORD WINAPI Act768ThreadProc(LPVOID lpParam) {
+        Sleep(300);
+        
+        UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：正在获取游戏信息...");
+        
+        SendAct768GameInfoPacket();
+        for (int i = 0; i < 30 && ACT768_STATE.waitingResponse; i++) Sleep(100);
+        
+        if (ACT768_STATE.playCount <= 0) {
+            UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：今日次数已用完");
+            return 0;
+        }
+        
+        if (ACT768_STATE.restTime > 0) {
+            UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：冷却中，请稍后再试");
+            return 0;
+        }
+        
+        // 尝试扫荡（用户勾选扫荡复选框时直接执行，由服务器判断是否可扫荡）
+        if (ACT768_STATE.useSweep) {
+            UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：正在获取扫荡信息...");
+            
+            Sleep(300);
+            g_act768SweepSuccess = false;
+            SendAct768SweepInfoPacket();
+            for (int i = 0; i < 30 && ACT768_STATE.waitingResponse; i++) Sleep(100);
+            
+            // 检查扫荡信息是否成功（sweep_info的result==0才成功）
+            if (!g_act768SweepSuccess) {
+                // 扫荡失败，需要重新游戏
+                UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：扫荡条件不满足，开始游戏...");
+            } else {
+                // 执行扫荡
+                Sleep(300);
+                g_act768SweepSuccess = false;
+                SendAct768SweepPacket();
+                for (int i = 0; i < 30 && ACT768_STATE.waitingResponse; i++) Sleep(100);
+                
+                // 检查扫荡是否成功（sweep的result!=3才成功）
+                if (g_act768SweepSuccess) {
+                    UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：扫荡完成！");
+                    return 0;
+                }
+                // 扫荡失败，继续游戏流程
+            }
+        }
+        
+        // 需要完成一局游戏
+        UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：开始游戏...");
+        
+        Sleep(300);
+        SendAct768StartGamePacket();
+        for (int i = 0; i < 30 && ACT768_STATE.waitingResponse; i++) Sleep(100);
+        
+        // 发送大量 GAME_HIT 模拟游戏过程
+        // 游戏机制：连击105次 = 40次Award + 65次Gift
+        // type=1: 击中 Award（奖励物品，40个）
+        // type=2: 击中 Gift（礼物，65个）
+        
+        const int awardHits = 40;   // Award 连击次数
+        const int giftHits = 65;    // Gift 连击次数
+        const int totalHits = awardHits + giftHits;  // 总连击105次
+        
+        DWORD lastSendTime = GetTickCount();
+        const DWORD minInterval = 100;  // 最小发送间隔100ms
+        
+        for (int i = 0; i < totalHits; i++) {
+            // 每10次更新一次进度提示
+            if (i % 10 == 0 || i == totalHits - 1) {
+                wchar_t msg[128];
+                swprintf_s(msg, L"宝盆纳万财：收集奖励中... 进度 %d/%d", i + 1, totalHits);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+            
+            int type, index, awardId;
+            if (i < awardHits) {
+                // 前40次：发送 Award（type=1）
+                type = 1;
+                index = i + 1;  // index 从1开始
+                awardId = ACT768_STATE.awardArr.size() > 0 ? ACT768_STATE.awardArr[i] : 0;
+            } else {
+                // 后65次：发送 Gift（type=2）
+                type = 2;
+                index = 0;
+                awardId = 0;
+            }
+            
+            SendAct768GameHitPacket(type, index, awardId);
+            
+            // 智能延迟：计算距离上次发送的时间
+            DWORD now = GetTickCount();
+            DWORD elapsed = now - lastSendTime;
+            if (elapsed < minInterval) {
+                Sleep(minInterval - elapsed);
+            }
+            lastSendTime = GetTickCount();
+        }
+        
+        Sleep(300);
+        SendAct768EndGamePacket();  // 结束游戏
+        UIBridge::Instance().UpdateHelperText(L"宝盆纳万财：游戏完成，获得最高分！");
+        return 0;
+    }
+    
+    BOOL SendOneKeyAct768Packet(bool useSweep) {
+        ACT768_STATE.useSweep = useSweep;  // 设置扫荡选项
+        HANDLE hThread = CreateThread(nullptr, 0, Act768ThreadProc, nullptr, 0, nullptr);
+        if (hThread) { CloseHandle(hThread); return TRUE; }
+        return FALSE;
+    }
+    
+    void ProcessAct768Response(const GamePacket& packet) {
+        if (packet.body.size() < 2) return;
+        const BYTE* body = packet.body.data();
+        size_t offset = 0;
+        
+        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
+        offset += 2;
+        if (offset + strLen > packet.body.size()) return;
+        
+        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
+        offset += strLen;
+        
+        ACT768_STATE.waitingResponse = false;
+        
+        if (operation == "open_ui") {
+            // AS3 格式: playTime(4) + restTime(4) + skip(4) + giftNum(4) + skip(4) +
+            //          popFlag(4) + highScore(4) + highHit(4) + catchId(4) + catchList[2](8) = 44字节
+            if (offset + 44 <= packet.body.size()) {
+                ACT768_STATE.playCount = ReadInt32LE(body, offset);   // playTime
+                ACT768_STATE.restTime = ReadInt32LE(body, offset);    // restTime
+                offset += 4;  // skip
+                offset += 4;  // giftNum (不使用)
+                offset += 4;  // skip
+                offset += 4;  // popFlag (不使用)
+                ACT768_STATE.bestScore = ReadInt32LE(body, offset);   // highScore
+                ACT768_STATE.sweepAvailable = (ACT768_STATE.bestScore > 0);
+                // highHit, catchId, catchList 不需要解析
+            }
+        }
+        else if (operation == "start_game") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result == 0 && offset + 20 <= packet.body.size()) {
+                    offset += 4; // skip
+                    ACT768_STATE.checkCode = ReadInt32LE(body, offset);
+                    ACT768_STATE.award1 = ReadInt32LE(body, offset);  // 奖励类型1
+                    ACT768_STATE.award2 = ReadInt32LE(body, offset);  // 奖励类型2
+                    // 解析40个奖励物品ID
+                    ACT768_STATE.awardArr.clear();
+                    for (int i = 0; i < 40 && offset + 4 <= packet.body.size(); i++) {
+                        ACT768_STATE.awardArr.push_back(ReadInt32LE(body, offset));
+                    }
+                }
+            }
+        }
+        else if (operation == "sweep_info") {
+            // sweep_info 成功条件：result == 0
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                g_act768SweepSuccess = (result == 0);
+            }
+        }
+        else if (operation == "sweep") {
+            // sweep 成功条件：result != 3
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                g_act768SweepSuccess = (result != 3);
+                if (result != 3 && offset + 8 <= packet.body.size()) {
+                    ACT768_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+        else if (operation == "end_game") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result != 3 && offset + 8 <= packet.body.size()) {
+                    ACT768_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+    }
+    
+    // ============ 磐石御天火功能实现 (Act793) ============
+    
+    // 使用新的状态管理器
+    #define ACT793_STATE ActivityStateManager::Instance().GetAct793State()
+    
+    // 兼容旧代码的静态变量映射到状态管理器
+    static bool g_act793SweepSuccess = false;  // 仅用于sweep_success标志
+    
+    static std::vector<BYTE> BuildAct793Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {}) {
+        return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act793::ACTIVITY_ID, operation, bodyValues);
+    }
+    
+    BOOL SendAct793Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+        std::vector<BYTE> packet = BuildAct793Packet(operation, bodyValues);
+        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()),
+                          Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+    }
+    
+    BOOL SendAct793GameInfoPacket() {
+        ACT793_STATE.waitingResponse = true;
+        return SendAct793Packet("open_ui");
+    }
+    
+    BOOL SendAct793StartGamePacket() {
+        ACT793_STATE.waitingResponse = true;
+        return SendAct793Packet("start_game");
+    }
+    
+    BOOL SendAct793GameHitPacket(int hitCount) {
+        // 封包格式: [game_hit, hitCount + 1000]
+        // 注意：game_hit 服务器不返回响应，所以直接使用SendPacket不等待响应
+        std::vector<BYTE> packet = BuildAct793Packet("game_hit", {hitCount + 1000});
+        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    }
+    
+    BOOL SendAct793EndGamePacket(int medalCount) {
+        // 计算校验码: checkCode & (userId % checkCode)
+        int clientCheckCode = 0;
+        if (ACT793_STATE.checkCode != 0) {
+            clientCheckCode = ACT793_STATE.checkCode & (static_cast<int>(g_userId) % ACT793_STATE.checkCode);
+        }
+        return SendAct793Packet("end_game", {clientCheckCode, medalCount});
+    }
+    
+    BOOL SendAct793SweepInfoPacket() {
+        ACT793_STATE.waitingResponse = true;
+        return SendAct793Packet("sweep_info");
+    }
+    
+    BOOL SendAct793SweepPacket() {
+        ACT793_STATE.waitingResponse = true;
+        return SendAct793Packet("sweep");
+    }
+    
+    DWORD WINAPI Act793ThreadProc(LPVOID lpParam) {
+        int targetMedals = ACT793_STATE.targetMedals;
+        
+        Sleep(300);
+        UIBridge::Instance().UpdateHelperText(L"磐石御天火：正在获取游戏信息...");
+        
+        SendAct793GameInfoPacket();
+        for (int i = 0; i < 30 && ACT793_STATE.waitingResponse; i++) Sleep(100);
+        
+        if (ACT793_STATE.playCount <= 0) {
+            UIBridge::Instance().UpdateHelperText(L"磐石御天火：今日次数已用完");
+            return 0;
+        }
+        
+        if (ACT793_STATE.restTime > 0) {
+            UIBridge::Instance().UpdateHelperText(L"磐石御天火：冷却中，请稍后再试");
+            return 0;
+        }
+        
+        // 尝试扫荡
+        if (ACT793_STATE.useSweep) {
+            UIBridge::Instance().UpdateHelperText(L"磐石御天火：正在获取扫荡信息...");
+            
+            Sleep(300);
+            g_act793SweepSuccess = false;
+            SendAct793SweepInfoPacket();
+            for (int i = 0; i < 30 && ACT793_STATE.waitingResponse; i++) Sleep(100);
+            
+            if (!g_act793SweepSuccess) {
+                UIBridge::Instance().UpdateHelperText(L"磐石御天火：扫荡条件不满足，开始游戏...");
+            } else {
+                Sleep(300);
+                g_act793SweepSuccess = false;
+                SendAct793SweepPacket();
+                for (int i = 0; i < 30 && ACT793_STATE.waitingResponse; i++) Sleep(100);
+                
+                if (g_act793SweepSuccess) {
+                    UIBridge::Instance().UpdateHelperText(L"磐石御天火：扫荡完成！");
+                    return 0;
+                }
+            }
+        }
+        
+        // 开始游戏
+        UIBridge::Instance().UpdateHelperText(L"磐石御天火：开始游戏...");
+        
+        Sleep(300);
+        SendAct793StartGamePacket();
+        for (int i = 0; i < 30 && ACT793_STATE.waitingResponse; i++) Sleep(100);
+        
+        if (ACT793_STATE.checkCode == 0) {
+            UIBridge::Instance().UpdateHelperText(L"磐石御天火：获取校验码失败");
+            return 0;
+        }
+        
+        // 模拟游戏过程：发送多次 game_hit 封包收集勋章
+        for (int i = 0; i < targetMedals; i++) {
+            if (i % 10 == 0 || i == targetMedals - 1) {
+                wchar_t msg[128];
+                swprintf_s(msg, L"磐石御天火：游戏进行中... 进度 %d/%d", i + 1, targetMedals);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+            SendAct793GameHitPacket(i + 1);
+            Sleep(300);  // 固定300ms延迟
+        }
+        
+        Sleep(300);
+        SendAct793EndGamePacket(targetMedals);
+        UIBridge::Instance().UpdateHelperText(L"磐石御天火：游戏完成！");
+        return 0;
+    }
+    
+    BOOL SendOneKeyAct793Packet(bool useSweep, int targetMedals) {
+        ACT793_STATE.useSweep = useSweep;
+        ACT793_STATE.targetMedals = targetMedals;
+        HANDLE hThread = CreateThread(nullptr, 0, Act793ThreadProc, nullptr, 0, nullptr);
+        if (hThread) { CloseHandle(hThread); return TRUE; }
+        return FALSE;
+    }
+    
+    void ProcessAct793Response(const GamePacket& packet) {
+        if (packet.body.size() < 2) return;
+        const BYTE* body = packet.body.data();
+        size_t offset = 0;
+        
+        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
+        offset += 2;
+        if (offset + strLen > packet.body.size()) return;
+        
+        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
+        offset += strLen;
+        
+        ACT793_STATE.waitingResponse = false;
+        
+        if (operation == "open_ui") {
+            // open_ui 响应格式:
+            // playTime(4B) + restTime(4B) + skip(4B) + redBerryCount(4B) + skip(4B) + 
+            // isPop(4B) + evoFlag(4B) + isMove(4B)
+            if (offset + 32 <= packet.body.size()) {
+                ACT793_STATE.playCount = ReadInt32LE(body, offset);
+                ACT793_STATE.restTime = ReadInt32LE(body, offset);
+                offset += 4;  // skip
+                ACT793_STATE.medalCount = ReadInt32LE(body, offset);
+                offset += 4;  // skip
+                offset += 4;  // isPop (不使用)
+                offset += 4;  // evoFlag (不使用)
+                offset += 4;  // isMove (不使用)
+                
+                // 通知UI更新
+                wchar_t msg[256];
+                swprintf_s(msg, L"磐石御天火：次数=%d 冷却=%d秒 勋章=%d", 
+                          ACT793_STATE.playCount.load(), ACT793_STATE.restTime.load(), ACT793_STATE.medalCount.load());
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+        }
+        else if (operation == "start_game") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result == 0 && offset + 8 <= packet.body.size()) {
+                    offset += 4;  // skip
+                    ACT793_STATE.checkCode = ReadInt32LE(body, offset);
+                }
+            }
+        }
+        else if (operation == "sweep_info") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                g_act793SweepSuccess = (result == 0);
+            }
+        }
+        else if (operation == "sweep") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                g_act793SweepSuccess = (result == 0);
+                if (result == 0 && offset + 8 <= packet.body.size()) {
+                    ACT793_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+        else if (operation == "end_game") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result == 0 && offset + 8 <= packet.body.size()) {
+                    ACT793_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+    }
+    
+    // ============ 驱傩聚福寿功能实现 (Act778) ============
+    
+    // 使用新的状态管理器
+    #define ACT778_STATE ActivityStateManager::Instance().GetAct778State()
+    
+    // 兼容旧代码的静态变量映射到状态管理器
+    static std::vector<std::pair<int, int>> g_act778AwardList;  // [index, type] 列表
+    
+    static std::vector<BYTE> BuildAct778Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+        return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act778::ACTIVITY_ID, operation, bodyValues);
+    }
+    
+    BOOL SendAct778Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+        std::vector<BYTE> packet = BuildAct778Packet(operation, bodyValues);
+        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), 
+                          Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+    }
+    
+    BOOL SendAct778GameInfoPacket() {
+        ACT778_STATE.waitingResponse = true;
+        return SendAct778Packet("open_ui");
+    }
+    
+    BOOL SendAct778StartGamePacket() {
+        ACT778_STATE.waitingResponse = true;
+        return SendAct778Packet("start_game");
+    }
+    
+    BOOL SendAct778GameHitPacket(int below) {
+        // 校验码: (random 1000-1999) * (checkCode + below) + 5115
+        int random_part = (rand() % 1000) + 1000;
+        int checkCode = random_part * (ACT778_STATE.checkCode + below) + 5115;
+        return SendAct778Packet("game_hit", {checkCode, below});
+    }
+    
+    BOOL SendAct778EndGamePacket(int monsterCount, int endType) {
+        // 校验码: checkCode & (userId % checkCode)
+        // endType: 0=退出, 1=完成
+        int clientCheckCode = ACT778_STATE.checkCode & (g_userId % ACT778_STATE.checkCode);
+        return SendAct778Packet("end_game", {clientCheckCode, monsterCount, endType});
+    }
+    
+    BOOL SendAct778SweepInfoPacket() {
+        ACT778_STATE.waitingResponse = true;
+        return SendAct778Packet("sweep_info");
+    }
+    
+    BOOL SendAct778SweepPacket() {
+        ACT778_STATE.waitingResponse = true;
+        return SendAct778Packet("sweep");
+    }
+    
+    // 扫荡是否成功的标志
+    static bool g_act778SweepSuccess = false;
+    
+    DWORD WINAPI Act778ThreadProc(LPVOID lpParam) {
+        Sleep(300);
+        
+        UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：正在获取游戏信息...");
+        
+        SendAct778GameInfoPacket();
+        for (int i = 0; i < 30 && ACT778_STATE.waitingResponse; i++) Sleep(100);
+        
+        if (ACT778_STATE.playCount <= 0) {
+            UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：今日次数已用完");
+            return 0;
+        }
+        
+        if (ACT778_STATE.restTime > 0) {
+            UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：冷却中，请稍后再试");
+            return 0;
+        }
+        
+        // 尝试扫荡（用户勾选扫荡复选框时直接执行，由服务器判断是否可扫荡）
+        if (ACT778_STATE.useSweep) {
+            UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：正在获取扫荡信息...");
+            
+            Sleep(300);
+            g_act778SweepSuccess = false;
+            SendAct778SweepInfoPacket();
+            for (int i = 0; i < 30 && ACT778_STATE.waitingResponse; i++) Sleep(100);
+            
+            // 检查扫荡信息是否成功（sweep_info的result!=3才成功）
+            if (!g_act778SweepSuccess) {
+                // 扫荡失败，需要重新游戏
+                UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：扫荡条件不满足，开始游戏...");
+            } else {
+                // 执行扫荡
+                Sleep(300);
+                g_act778SweepSuccess = false;
+                SendAct778SweepPacket();
+                for (int i = 0; i < 30 && ACT778_STATE.waitingResponse; i++) Sleep(100);
+                
+                // 检查扫荡是否成功（sweep的result!=3才成功）
+                if (g_act778SweepSuccess) {
+                    UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：扫荡完成！");
+                    return 0;
+                }
+                // 扫荡失败，继续游戏流程
+            }
+        }
+        
+        // 需要完成一局游戏
+        UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：开始游戏...");
+        
+        Sleep(300);
+        SendAct778StartGamePacket();
+        for (int i = 0; i < 30 && ACT778_STATE.waitingResponse; i++) Sleep(100);
+        
+        // 遍历 awardList 发送 game_hit 获取奖励
+        // awardList 格式: [[index, below], ...]
+        // below 含义: 1=buff, 2=年糕, 其他=道具ID
+        int awardCount = static_cast<int>(g_act778AwardList.size());
+        
+        DWORD lastSendTime = GetTickCount();
+        const DWORD minInterval = 100;  // 最小发送间隔100ms
+        
+        // 发送 game_hit 拾取每个奖励，每20次更新进度
+        for (int i = 0; i < awardCount; i++) {
+            // 每20次更新一次进度提示
+            if (i % 20 == 0 || i == awardCount - 1) {
+                wchar_t msg[128];
+                swprintf_s(msg, L"驱傩聚福寿：拾取奖励中... 进度 %d/%d", i + 1, awardCount);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+            
+            int below = g_act778AwardList[i].second;  // below 值
+            SendAct778GameHitPacket(below);
+            
+            // 智能延迟：计算距离上次发送的时间
+            DWORD now = GetTickCount();
+            DWORD elapsed = now - lastSendTime;
+            if (elapsed < minInterval) {
+                Sleep(minInterval - elapsed);
+            }
+            lastSendTime = GetTickCount();
+        }
+        
+        // 游戏限制80只年兽，monsterCount 使用80
+        Sleep(300);
+        SendAct778EndGamePacket(80, 1);  // monsterCount=80, endType=1(完成)
+        
+        UIBridge::Instance().UpdateHelperText(L"驱傩聚福寿：游戏完成，击杀80只年兽！");
+        return 0;
+    }
+    
+    BOOL SendOneKeyAct778Packet(bool useSweep) {
+        ACT778_STATE.useSweep = useSweep;  // 设置扫荡选项
+        HANDLE hThread = CreateThread(nullptr, 0, Act778ThreadProc, nullptr, 0, nullptr);
+        if (hThread) { CloseHandle(hThread); return TRUE; }
+        return FALSE;
+    }
+    
+    void ProcessAct778Response(const GamePacket& packet) {
+        if (packet.body.size() < 2) return;
+        const BYTE* body = packet.body.data();
+        size_t offset = 0;
+        
+        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
+        offset += 2;
+        if (offset + strLen > packet.body.size()) return;
+        
+        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
+        offset += strLen;
+        
+        ACT778_STATE.waitingResponse = false;
+        
+        if (operation == "open_ui") {
+            // ActBaseInfoDto.readFromStream 格式:
+            // playCount(4B) + frozenTime(4B) + buyGameCnt(4B) + snowPowerCount(4B) + 
+            // skip(4B) + skip(4B) + skip(4B) + HistoryMaxScore(4B) + catch_list...
+            if (offset + 32 <= packet.body.size()) {
+                ACT778_STATE.playCount = ReadInt32LE(body, offset);  // playCount
+                ACT778_STATE.restTime = ReadInt32LE(body, offset);   // frozenTime
+                offset += 4;  // buyGameCnt (不使用)
+                offset += 4;  // snowPowerCount (不使用)
+                offset += 4;  // skip
+                offset += 4;  // skip
+                offset += 4;  // skip
+                ACT778_STATE.bestScore = ReadInt32LE(body, offset);  // HistoryMaxScore
+                ACT778_STATE.sweepAvailable = (ACT778_STATE.bestScore > 0);
+                // 后续还有 catch_list 数据，但不需要解析
+            }
+        }
+        else if (operation == "start_game") {
+            // 响应格式 (根据 AS3 decodeBeginGame + ActStartInfoDto.readFromStream):
+            // result(4B) + skip(4B) + checkCode(4B) + count(4B) + [index(4B) + type(4B)] * count
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);  // result
+                if (result == 0 && offset + 16 <= packet.body.size()) {
+                    offset += 4;  // skip 第一个 int（ActStartInfoDto.readFromStream 中跳过）
+                    ACT778_STATE.checkCode = ReadInt32LE(body, offset);
+                    int count = ReadInt32LE(body, offset);
+                    // 解析 awardList
+                    g_act778AwardList.clear();
+                    for (int i = 0; i < count && offset + 8 <= packet.body.size(); i++) {
+                        int index = ReadInt32LE(body, offset);
+                        int type = ReadInt32LE(body, offset);
+                        g_act778AwardList.push_back({index, type});
+                    }
+                }
+            }
+        }
+        else if (operation == "sweep_info") {
+            // sweep_info 成功条件：result != 3
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                g_act778SweepSuccess = (result != 3);
+            }
+        }
+        else if (operation == "sweep") {
+            // sweep 成功条件：result != 3
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                g_act778SweepSuccess = (result != 3);
+                if (result != 3 && offset + 8 <= packet.body.size()) {
+                    ACT778_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+        else if (operation == "end_game") {
+            if (offset + 4 <= packet.body.size()) {
+                int result = ReadInt32LE(body, offset);
+                if (result != 3 && offset + 8 <= packet.body.size()) {
+                    ACT778_STATE.playCount = ReadInt32LE(body, offset);
+                }
+            }
+        }
+    }
+    
+      // anonymous namespace
+
+// ============================================================================
+// 封包回调
+// ============================================================================
+
+void SetPacketCallback(PACKET_CALLBACK callback) {
+    g_PacketCallback = callback;
+}
+
+// ============================================================================
+// 十六进制转换工具
+// ============================================================================
+
+std::string HexToString(const BYTE* pData, DWORD dwSize) {
+    std::stringstream ss;
+    for (DWORD i = 0; i < dwSize; i++) {
+        ss << std::hex << std::setw(2) << std::setfill('0') 
+           << static_cast<int>(pData[i]);
+        if (i < dwSize - 1) {
+            ss << " ";
+        }
+    }
+    return ss.str();
+}
+
+std::vector<BYTE> StringToHex(const std::string& str) {
+    std::vector<BYTE> result;
+    try {
+        std::string cleanStr;
+        
+        // 移除所有非十六进制字符
+        for (char c : str) {
+            if (isxdigit(static_cast<unsigned char>(c))) {
+                cleanStr += c;
+            }
+        }
+        
+        // 确保长度为偶数
+        if (cleanStr.length() % 2 != 0) {
+            cleanStr = "0" + cleanStr;
+        }
+
+        // 每两个字符转换一个字节
+        for (size_t i = 0; i + 1 < cleanStr.length(); i += 2) {
+            std::string byteStr = cleanStr.substr(i, 2);
+            BYTE b = static_cast<BYTE>(std::stoul(byteStr, nullptr, 16));
+            result.push_back(b);
+        }
+    } catch (...) {
+        result.clear();
+    }
+    
+    return result;
+}
+
+// ============================================================================
+// UI 同步函数
+// ============================================================================
+
+void SyncPacketsToUI() {
+    // 拷贝数据，减少锁持有时间
+    std::vector<PACKET> packetsCopy;
+    {
+        CriticalSectionLock lock(g_packetListCS.Get());
+        if (!g_hWnd || g_PacketList.empty()) {
+            return;
+        }
+        packetsCopy = g_PacketList;
+    }
+    
+    // 检查窗口句柄有效性
+    if (!IsWindow(g_hWnd)) {
+        return;
+    }
+    
+    // 清空UI列表项
+    {
+        std::wstring jsClear = 
+            L"(function(){"
+            L" var pList=document.getElementById('packet-list');"
+            L" if(pList){"
+            L"   var pListItems=document.getElementById('packet-list-items');"
+            L"   if(pListItems){ pListItems.innerHTML=''; }"
+            L" }"
+            L"})();";
+        
+        UIBridge::Instance().ExecuteJS(jsClear);
+    }
+    
+    // 批量同步封包
+    for (size_t i = 0; i < packetsCopy.size(); ++i) {
+        const auto& packet = packetsCopy[i];
+        if (!packet.pData) continue;
+
+        std::string hexStr = HexToString(packet.pData, packet.dwSize);
+        std::wstring wideHexStr = Utf8ToWide(hexStr);
+        std::wstring direction = packet.bSend ? L"发送包" : L"接收包";
+        
+        // 获取封包标签
+        std::string labelUtf8 = "";
+        if (packet.dwSize >= PacketProtocol::HEADER_SIZE) {
+            size_t offset = 0;
+            uint16_t magic = ReadUInt16LE(packet.pData, offset);  // Magic: offset 0-1
+            uint16_t length = ReadUInt16LE(packet.pData, offset); // Length: offset 2-3
+            if (magic == PacketProtocol::MAGIC_NORMAL || magic == PacketProtocol::MAGIC_COMPRESSED) {
+                uint32_t opcode = ReadUInt32LE(packet.pData, offset);  // Opcode: offset 4-7
+                labelUtf8 = GetPacketLabel(opcode, packet.bSend);
+            }
+        }
+        std::wstring wideLabel = Utf8ToWide(labelUtf8);
+        
+        // 创建时间戳
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        wchar_t timeStr[64];
+        swprintf_s(timeStr, L"%02d:%02d:%02d", st.wHour, st.wMinute, st.wSecond);
+        
+        std::wstring jsCode = 
+            L"if(window.addPacketToList) { window.addPacketToList(" 
+            + std::to_wstring(i + 1) + L", '" + direction + L"', '" 
+            + wideHexStr + L"', '" + timeStr + L"', '" + wideLabel + L"'); }";
+        
+        UIBridge::Instance().ExecuteJS(jsCode);
+    }
+    
+    // 在最后统一更新一次计数
+    std::wstring jsUpdateCount = 
+        L"if(window.updatePacketCount) { window.updatePacketCount(" 
+        + std::to_wstring(packetsCopy.size()) + L"); }";
+    
+    UIBridge::Instance().ExecuteJS(jsUpdateCount);
+}
+
+void AddPacketToUI(BOOL bSend, const BYTE* pData, DWORD dwSize, DWORD dwTime) {
+    if (!g_hWnd || !pData || dwSize == 0) return;
+    if (!g_bInterceptEnabled) return;
+
+    extern bool g_is_packet_window_visible;
+    
+    size_t packetIndex;
+    {
+        CriticalSectionLock lock(g_packetListCS.Get());
+        packetIndex = g_PacketList.size();  // 封包已添加，直接使用size()，不加1
+    }
+
+    // 如果窗口可见，同步整个列表到UI
+    if (g_is_packet_window_visible) {
+        SyncPacketsToUI();
+    } else {
+        // 窗口关闭时，只更新计数
+        std::wstring jsCountCode = 
+            L"if(window.updatePacketCount) { window.updatePacketCount(" 
+            + std::to_wstring(packetIndex) + L"); }";
+        
+        UIBridge::Instance().ExecuteJS(jsCountCode);
+    }
+}
+
+// ============================================================================
+// Hook 函数
+// ============================================================================
+
+int WINAPI HookedSend(SOCKET s, const char* buf, int len, int flags) {
+    // 总是记录游戏套接字
+    if (len > 0) {
+        const BYTE* pData = reinterpret_cast<const BYTE*>(buf);
+        if (IsGamePacket(pData, static_cast<DWORD>(len))) {
+            g_LastGameSocket = s;
+        }
+    }
+    
+    // 劫持检测和修改
+    if (g_bHijackEnabled && len > 0) {
+        const BYTE* pData = reinterpret_cast<const BYTE*>(buf);
+        DWORD dwSize = static_cast<DWORD>(len);
+        std::vector<BYTE> modifiedData;
+        
+        if (ProcessHijack(true, pData, &dwSize, &modifiedData)) {
+            // 劫持成功：拦截或替换封包
+            if (dwSize == 0) {
+                // 拦截：返回已发送的假象
+                return len;
+            } else if (!modifiedData.empty()) {
+                // 替换：发送修改后的封包
+                int result = OriginalSend(s, reinterpret_cast<const char*>(modifiedData.data()),
+                                          static_cast<int>(dwSize), flags);
+                // 记录修改后的封包
+                if (g_bInterceptEnabled && g_bInterceptSend && g_bInitialized) {
+                    PACKET packet;
+                    packet.dwSize = dwSize;
+                    packet.bSend = TRUE;
+                    packet.pData = new BYTE[dwSize];
+                    memcpy(packet.pData, modifiedData.data(), dwSize);
+                    packet.dwTime = GetTickCount();
+
+                    {
+                        CriticalSectionLock lock(g_packetListCS.Get());
+                        g_PacketList.push_back(packet);
+                    }
+                    // 锁外调用 UI 更新，避免死锁
+                    AddPacketToUI(TRUE, packet.pData, packet.dwSize, packet.dwTime);
+
+                    if (g_PacketCallback) {
+                        g_PacketCallback(TRUE, modifiedData.data(), dwSize);
+                    }
+                }
+                return result;
+            }
+        }
+    }
+    
+    // ========================================================================
+    // 战斗封包处理
+    // Counter 在收到 BATTLE_START 响应后计算并存储在全局变量中
+    // ========================================================================
+    
+    // 检查是否需要阻止发送
+    if (len > 0 && ShouldBlockPacketSend(reinterpret_cast<const BYTE*>(buf), static_cast<DWORD>(len))) {
+        return len;  // 欺骗调用者认为已发送
+    }
+
+    // 检测进入世界封包，重置 counter
+    if (len >= static_cast<int>(PacketProtocol::HEADER_SIZE)) {
+        const BYTE* pData = reinterpret_cast<const BYTE*>(buf);
+        if (IsGamePacket(pData, static_cast<DWORD>(len))) {
+            uint32_t opcode = ReadOpcode(pData);
+            if (opcode == Opcode::ENTER_SCENE_SEND) {
+                g_battleCounter = 1;  // 进入世界时重置 counter
+            }
+            // 检测账号验证封包，提取登录 key
+            if (opcode == Opcode::CHECK_ACCOUNT_SEND) {
+                ExtractLoginKeyFromPacket(pData, static_cast<DWORD>(len));
+            }
+        }
+    }
+    
+    // 拦截并记录封包
+    if (g_bInterceptEnabled && g_bInterceptSend && g_bInitialized && len > 0) {
+        const BYTE* pData = reinterpret_cast<const BYTE*>(buf);
+        DWORD dwSize = static_cast<DWORD>(len);
+
+        if (IsGamePacket(pData, dwSize)) {
+            PACKET packet;
+            packet.dwSize = dwSize;
+            packet.bSend = TRUE;
+            packet.pData = new BYTE[dwSize];
+            memcpy(packet.pData, pData, dwSize);
+            packet.dwTime = GetTickCount();
+
+            {
+                CriticalSectionLock lock(g_packetListCS.Get());
+                g_PacketList.push_back(packet);
+            }
+            // 锁外调用 UI 更新，避免死锁
+            AddPacketToUI(TRUE, packet.pData, packet.dwSize, packet.dwTime);
+
+            if (g_PacketCallback) {
+                g_PacketCallback(TRUE, pData, dwSize);
+            }
+        }
+    }
+    
+    return OriginalSend(s, buf, len, flags);
+}
+
+// ============================================================================
+// 接收封包处理器（拆分自 HookedRecv）
+// ============================================================================
+
+namespace {
+
+/**
+ * @brief 处理进入世界封包
+ */
+void ProcessEnterWorldPacket(const GamePacket& gp) {
+    const auto& body = gp.body;
+    if (body.size() < 4) return;
+    
+    size_t offset = 0;
+    
+    // 跳过 timeleft, isNewHand, coin, x_coin (4 * 4 = 16字节)
+    offset += 16;
+    
+    // 跳过 UTF 字符串
+    if (offset + 2 <= body.size()) {
+        uint16_t strLen = static_cast<uint16_t>(body[offset]) | 
+                          (static_cast<uint16_t>(body[offset + 1]) << 8);
+        offset += 2 + strLen;
+    }
+    
+    // 跳过 5 个 int (20字节)
+    offset += 20;
+    
+    // 读取卡布号
+    if (offset + 4 > body.size()) return;
+    
+    uint32_t kabuId = static_cast<uint32_t>(body[offset]) |
+                      (static_cast<uint32_t>(body[offset + 1]) << 8) |
+                      (static_cast<uint32_t>(body[offset + 2]) << 16) |
+                      (static_cast<uint32_t>(body[offset + 3]) << 24);
+    offset += 4;
+    
+    g_userId = kabuId;
+    
+    // 读取卡布名
+    if (offset + 2 > body.size()) return;
+    
+    uint16_t nameLen = static_cast<uint16_t>(body[offset]) | 
+                       (static_cast<uint16_t>(body[offset + 1]) << 8);
+    offset += 2;
+    
+    if (offset + nameLen > body.size()) return;
+    
+    std::string nameUtf8(reinterpret_cast<const char*>(&body[offset]), nameLen);
+    std::wstring kabuName = Utf8ToWide(nameUtf8);
+    
+    // 更新窗口标题
+    std::wstring newTitle = L"卡布西游浮影微端 V1.03 - " + 
+                           std::to_wstring(kabuId) + L" " + kabuName;
+    SetWindowTextW(g_hWnd, newTitle.c_str());
+}
+
+/**
+ * @brief 处理分解响应后的自动查询
+ */
+void HandleDecomposeResponse() {
+    static DWORD g_lastDecomposeTime = 0;
+    DWORD currentTime = GetTickCount();
+    
+    if (currentTime - g_lastDecomposeTime >= 300) {
+        g_lastDecomposeTime = currentTime;
+        HANDLE hThread = CreateThread(NULL, 0, [](LPVOID) -> DWORD {
+            Sleep(300);
+            SendQueryBagPacket();
+            return 0;
+        }, NULL, 0, NULL);
+        if (hThread) {
+            CloseHandle(hThread); // 关闭线程句柄，避免资源泄漏
+        }
+    }
+}
+
+/**
+ * @brief 处理接收到的游戏封包
+ */
+void ProcessReceivedGamePackets(const BYTE* pData, DWORD dwSize,
+                                const std::vector<GamePacket>& gamePackets) {
+    auto& dispatcher = ResponseDispatcher::Instance();
+
+    for (const auto& gp : gamePackets) {
+        // 通知响应等待器收到封包（优化版：快速检查，只在有等待线程时才加锁）
+        ResponseWaiter::NotifyResponse(gp.opcode);
+
+        // 使用响应分发器分发封包
+        dispatcher.Dispatch(gp);
+    }
+}
+
+}  // anonymous namespace
+
+// ============================================================================
+// 登录 Key 提取函数实现
+// ============================================================================
+
+/**
+ * @brief 字节数组转十六进制字符串
+ * @param data 字节数组
+ * @param len 长度
+ * @return 十六进制字符串（小写）
+ */
+static std::string BytesToHexString(const BYTE* data, DWORD len) {
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (DWORD i = 0; i < len; ++i) {
+        ss << std::setw(2) << static_cast<int>(data[i]);
+    }
+    return ss.str();
+}
+
+/**
+ * @brief 从封包数据提取登录 key（整个封包十六进制字符串）
+ * @param pData 封包数据指针
+ * @param len 封包长度
+ * @return 提取是否成功
+ * 
+ * 存储整个封包的十六进制字符串，登录时再按易语言逻辑构造 URL
+ */
+BOOL ExtractLoginKeyFromPacket(const BYTE* pData, DWORD len) {
+    if (len < 12) return FALSE;  // 至少要有包头
+    
+    // 将整个封包转为十六进制字符串（大写）
+    std::string hexPacket = BytesToHexString(pData, len);
+    
+    // 转换为大写
+    for (auto& c : hexPacket) {
+        c = std::toupper(static_cast<unsigned char>(c));
+    }
+    
+    // 存储整个十六进制封包
+    g_loginKey = Utf8ToWide(hexPacket);
+    g_loginKeyCaptured.store(true);
+    
+    return TRUE;
+}
+
+/**
+ * @brief 构造登录 URL
+ * @param hexPacket 十六进制封包字符串
+ * @return 构造的登录 URL
+ *
+ * 易语言逻辑：
+ * key = 取右边(hexPacket, 28)  // 去掉前28个字符（14字节）
+ * URL = "http://enter.wanwan4399.com/bin-debug/KBgameindex.html?" + 十六进制到文本_GBK(key)
+ */
+std::wstring BuildLoginUrl(const std::wstring& hexPacket) {
+    const size_t PREFIX_LEN = 28;  // 前28个十六进制字符 = 14字节
+    if (hexPacket.length() <= PREFIX_LEN) {
+        return L"";
+    }
+    
+    // 提取 key（从第28个字符开始到末尾）
+    std::wstring keyHex = hexPacket.substr(PREFIX_LEN);
+    
+    // 将十六进制 key 转为字节数组，然后作为 GBK 文本
+    std::string keyText;
+    for (size_t i = 0; i + 1 < keyHex.length(); i += 2) {
+        std::wstring byteStr = keyHex.substr(i, 2);
+        BYTE b = static_cast<BYTE>(std::stoi(byteStr, nullptr, 16));
+        keyText.push_back(static_cast<char>(b));
+    }
+    
+    // 构造登录 URL
+    std::wstring url = L"http://enter.wanwan4399.com/bin-debug/KBgameindex.html?" + Utf8ToWide(keyText);
+    return url;
+}
+
+// ============================================================================
+// Hook 函数实现
+// ============================================================================
+
+int WINAPI HookedRecv(SOCKET s, char* buf, int len, int flags) {
+    int result = OriginalRecv(s, buf, len, flags);
+
+    if (result <= 0 || !g_bInitialized) {
+        return result;
+    }
+
+    const BYTE* pData = reinterpret_cast<const BYTE*>(buf);
+    DWORD dwSize = static_cast<DWORD>(result);
+
+    // ========================================================================
+    // 第一步：解析黏包，得到完整的封包列表
+    // ========================================================================
+    std::vector<GamePacket> gamePackets;
+    // 解析封包
+    bool hasValidPackets = PacketParser::ParsePackets(pData, dwSize, FALSE, gamePackets);
+    
+    // ========================================================================
+    // 第二步：封包级别过滤（支持黏包）
+    // ========================================================================
+    // 记录需要过滤的封包索引
+    std::vector<size_t> packetsToFilter;
+    bool hasBattleStart = false;
+    bool shouldFilterBattleStart = false;
+    
+    for (size_t i = 0; i < gamePackets.size(); i++) {
+        const auto& gp = gamePackets[i];
+        
+        // 0. 默认屏蔽检查（无条件屏蔽，无需用户勾选）
+        if (IsDefaultBlockedPacket(gp.opcode, gp.params, 
+                                   gp.body.empty() ? nullptr : gp.body.data(), 
+                                   gp.body.size())) {
+            packetsToFilter.push_back(i);
+            continue;  // 跳过后续处理
+        }
+        
+        // 1. 战斗开始响应 - 始终计算并存储 counter
+        if (gp.opcode == Opcode::BATTLE_START) {
+            hasBattleStart = true;
+            
+            // 读取战斗类型
+            int32_t battleType = 0;
+            if (gp.body.size() >= 4) {
+                size_t offset = 0;
+                battleType = ReadInt32LE(gp.body.data(), offset);
+            }
+
+            // 计算 counter
+            uint32_t currentCounter = g_battleCounter.load();
+            if (currentCounter == 0) {
+                currentCounter = 1;
+            }
+
+            bool isSpecialBattle = (battleType == 3 || battleType == 5 || battleType == 6 || 
+                                   battleType == 14 || battleType == 15);
+
+            if (isSpecialBattle) {
+                g_battleCounter = 1;
+            } else {
+                uint32_t newCounter = currentCounter + (g_userId.load() & 65535) + 9;
+                g_battleCounter = newCounter & 65535;
+            }
+
+            g_battleStarted = true;
+
+            // 屏蔽战斗功能
+            if (g_blockBattle.load()) {
+                shouldFilterBattleStart = true;
+                packetsToFilter.push_back(i);
+            }
+        }
+        
+        // 2. MD5 图片验证自动回复（不屏蔽，只自动回复）
+        if (gp.opcode == Opcode::BATTLE_MD5_CHECK) {
+            // 复制body和params用于异步处理
+            struct MD5ThreadData {
+                std::vector<BYTE> body;
+                uint32_t params;
+            };
+            MD5ThreadData* threadData = new MD5ThreadData{ gp.body, gp.params };
+            
+            // 异步处理验证（需要下载图片，耗时操作）
+            CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+                MD5ThreadData* data = (MD5ThreadData*)lpParam;
+                Sleep(100);  // 延迟100ms
+                ProcessMD5CheckAndReply(data->body, data->params);
+                delete data;
+                return 0;
+            }, threadData, 0, nullptr);
+        }
+
+        // 3. 自动回血功能
+        if (g_autoHeal && gp.opcode == Opcode::BATTLE_END && gp.params == 1) {
+            CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+                Sleep(100);
+                SendBeibeiHealPacket();
+                return 0;
+            }, nullptr, 0, nullptr);
+        }
+
+        // 4. 劫持检测和修改（接收包）
+        if (g_bHijackEnabled) {
+            size_t totalSize = PacketProtocol::HEADER_SIZE + gp.body.size();
+            std::vector<BYTE> packetData(totalSize);
+            
+            size_t offset = 0;
+            packetData[offset++] = gp.magic & 0xFF;
+            packetData[offset++] = (gp.magic >> 8) & 0xFF;
+            uint16_t bodyLen = static_cast<uint16_t>(gp.body.size());
+            packetData[offset++] = bodyLen & 0xFF;
+            packetData[offset++] = (bodyLen >> 8) & 0xFF;
+            packetData[offset++] = gp.opcode & 0xFF;
+            packetData[offset++] = (gp.opcode >> 8) & 0xFF;
+            packetData[offset++] = (gp.opcode >> 16) & 0xFF;
+            packetData[offset++] = (gp.opcode >> 24) & 0xFF;
+            packetData[offset++] = gp.params & 0xFF;
+            packetData[offset++] = (gp.params >> 8) & 0xFF;
+            packetData[offset++] = (gp.params >> 16) & 0xFF;
+            packetData[offset++] = (gp.params >> 24) & 0xFF;
+            if (!gp.body.empty()) {
+                memcpy(packetData.data() + offset, gp.body.data(), gp.body.size());
+            }
+            
+            std::vector<BYTE> modifiedData;
+            DWORD modifiedSize = static_cast<DWORD>(totalSize);
+
+            if (ProcessHijack(false, packetData.data(), &modifiedSize, &modifiedData)) {
+                // TODO: 实现封包替换功能
+            }
+        }
+    }
+
+    // ========================================================================
+    // 第三步：重构封包缓冲区（过滤掉需要屏蔽的封包）
+    // ========================================================================
+    if (!packetsToFilter.empty() && hasValidPackets) {
+        // 创建新的封包缓冲区
+        std::vector<BYTE> newBuffer;
+        newBuffer.reserve(dwSize);
+        
+        for (size_t i = 0; i < gamePackets.size(); i++) {
+            // 检查是否需要过滤此封包
+            bool shouldFilter = false;
+            for (size_t filterIdx : packetsToFilter) {
+                if (filterIdx == i) {
+                    shouldFilter = true;
+                    break;
+                }
+            }
+            
+            if (!shouldFilter) {
+                // 重新构造封包到新缓冲区
+                const auto& gp = gamePackets[i];
+                
+                // Magic (2 bytes)
+                newBuffer.push_back(gp.magic & 0xFF);
+                newBuffer.push_back((gp.magic >> 8) & 0xFF);
+                
+                // Length (2 bytes, little endian)
+                uint16_t bodyLen = static_cast<uint16_t>(gp.body.size());
+                newBuffer.push_back(bodyLen & 0xFF);
+                newBuffer.push_back((bodyLen >> 8) & 0xFF);
+                
+                // Opcode (4 bytes, little endian)
+                newBuffer.push_back(gp.opcode & 0xFF);
+                newBuffer.push_back((gp.opcode >> 8) & 0xFF);
+                newBuffer.push_back((gp.opcode >> 16) & 0xFF);
+                newBuffer.push_back((gp.opcode >> 24) & 0xFF);
+                
+                // Params (4 bytes, little endian)
+                newBuffer.push_back(gp.params & 0xFF);
+                newBuffer.push_back((gp.params >> 8) & 0xFF);
+                newBuffer.push_back((gp.params >> 16) & 0xFF);
+                newBuffer.push_back((gp.params >> 24) & 0xFF);
+                
+                // Body
+                if (!gp.body.empty()) {
+                    newBuffer.insert(newBuffer.end(), gp.body.begin(), gp.body.end());
+                }
+            }
+        }
+        
+        // 如果所有封包都被过滤
+        if (newBuffer.empty()) {
+            memset(buf, 0, result);
+            return 0;
+        }
+        
+        // 复制新缓冲区到原始缓冲区
+        size_t newSize = newBuffer.size();
+        if (newSize <= result) {
+            memset(buf, 0, result);
+            memcpy(buf, newBuffer.data(), newSize);
+            // 更新返回值为新大小
+            result = static_cast<int>(newSize);
+        }
+    }
+
+    // ========================================================================
+    // 第四步：处理解析后的封包（通知等待器、战斗处理等）
+    // ========================================================================
+    
+    // 额外的 ENTER_SCENE_BACK 检测（即使 ParsePackets 失败也检测）
+    if (dwSize >= PacketProtocol::HEADER_SIZE) {
+        uint32_t opcode = pData[4] | (pData[5] << 8) | (pData[6] << 16) | (pData[7] << 24);
+        uint16_t magic = pData[0] | (pData[1] << 8);
+        
+        // 直接检测 ENTER_SCENE_BACK 响应
+        if (opcode == Opcode::ENTER_SCENE_BACK && 
+            (magic == PacketProtocol::MAGIC_NORMAL || magic == PacketProtocol::MAGIC_COMPRESSED)) {
+            CriticalSectionLock lock(g_towerCS);
+            g_towerMapEntered = true;
+        }
+    }
+    
+    if (hasValidPackets) {
+        ProcessReceivedGamePackets(pData, dwSize, gamePackets);
+    }
+
+    // ========================================================================
+    // 第五步：显示封包（仅当启用接收拦截时）
+    // ========================================================================
+    if (g_bInterceptEnabled && g_bInterceptRecv && !gamePackets.empty()) {
+        for (const auto& gp : gamePackets) {
+            // 重新构造完整的封包数据（Magic + Length + Opcode + Params + Body）
+            size_t totalSize = PacketProtocol::HEADER_SIZE + gp.body.size();
+            BYTE* packetData = new BYTE[totalSize];
+            
+            size_t offset = 0;
+            // Magic (2 bytes)
+            packetData[offset++] = gp.magic & 0xFF;
+            packetData[offset++] = (gp.magic >> 8) & 0xFF;
+            // Length (2 bytes, little endian)
+            uint16_t bodyLen = static_cast<uint16_t>(gp.body.size());
+            packetData[offset++] = bodyLen & 0xFF;
+            packetData[offset++] = (bodyLen >> 8) & 0xFF;
+            // Opcode (4 bytes, little endian)
+            packetData[offset++] = gp.opcode & 0xFF;
+            packetData[offset++] = (gp.opcode >> 8) & 0xFF;
+            packetData[offset++] = (gp.opcode >> 16) & 0xFF;
+            packetData[offset++] = (gp.opcode >> 24) & 0xFF;
+            // Params (4 bytes, little endian)
+            packetData[offset++] = gp.params & 0xFF;
+            packetData[offset++] = (gp.params >> 8) & 0xFF;
+            packetData[offset++] = (gp.params >> 16) & 0xFF;
+            packetData[offset++] = (gp.params >> 24) & 0xFF;
+            // Body
+            if (!gp.body.empty()) {
+                memcpy(packetData + offset, gp.body.data(), gp.body.size());
+            }
+            
+            // 添加到封包列表
+            PACKET packet;
+            packet.dwSize = static_cast<DWORD>(totalSize);
+            packet.bSend = FALSE;
+            packet.pData = packetData;
+            packet.dwTime = GetTickCount();
+
+            {
+                CriticalSectionLock lock(g_packetListCS.Get());
+                g_PacketList.push_back(packet);
+            }
+            // 锁外调用 UI 更新，避免死锁
+            AddPacketToUI(FALSE, packet.pData, packet.dwSize, packet.dwTime);
+
+            // 调用回调函数
+            if (g_PacketCallback) {
+                g_PacketCallback(FALSE, packetData, static_cast<DWORD>(totalSize));
+            }
+        }
+    }
+
+    return result;
+}
+
+// ============================================================================
+// Hook 初始化
+// ============================================================================
+
+BOOL InitializeHooks() {
+    // 初始化 ResponseWaiter
+    ResponseWaiter::Initialize();
+    
+    // 初始化 data 拦截器
+    DataInterceptor::Initialize();
+    
+    if (!LoadMinHookFromMemory()) {
+        return FALSE;
+    }
+    
+    MH_STATUS status = g_pfnMH_Initialize();
+    if (status != MH_OK) {
+        UnloadMinHookFromMemory();
+        return FALSE;
+    }
+    
+    // Hook ws2_32.dll (socket)
+    HMODULE hWs2Module = LoadLibraryA("ws2_32.dll");
+    if (!hWs2Module) {
+        g_pfnMH_Uninitialize();
+        UnloadMinHookFromMemory();
+        return FALSE;
+    }
+    
+    LPVOID pSendAddr = (LPVOID)GetProcAddress(hWs2Module, "send");
+    LPVOID pRecvAddr = (LPVOID)GetProcAddress(hWs2Module, "recv");
+    
+    if (!pSendAddr || !pRecvAddr) {
+        g_pfnMH_Uninitialize();
+        UnloadMinHookFromMemory();
+        return FALSE;
+    }
+    
+    if (g_pfnMH_CreateHook(pSendAddr, HookedSend, (LPVOID*)&OriginalSend) != MH_OK ||
+        g_pfnMH_CreateHook(pRecvAddr, HookedRecv, (LPVOID*)&OriginalRecv) != MH_OK) {
+        g_pfnMH_Uninitialize();
+        UnloadMinHookFromMemory();
+        return FALSE;
+    }
+
+    status = g_pfnMH_EnableHook(MH_ALL_HOOKS);
+    if (status != MH_OK) {
+        g_pfnMH_Uninitialize();
+        UnloadMinHookFromMemory();
+        return FALSE;
+    }
+    
+    return TRUE;
+}
+
+VOID UninitializeHooks() {
+    if (g_hMinHookModule) {
+        g_pfnMH_DisableHook(MH_ALL_HOOKS);
+        g_pfnMH_Uninitialize();
+        UnloadMinHookFromMemory();
+    }
+    DataInterceptor::Cleanup();
+    
+    // 清理 ResponseWaiter
+    ResponseWaiter::Cleanup();
+}
+
+// ============================================================================
+// 拦截控制
+// ============================================================================
+
+VOID StartIntercept() {
+    g_bInterceptEnabled = true;
+}
+
+VOID StopIntercept() {
+    g_bInterceptEnabled = false;
+}
+
+VOID SetInterceptType(BOOL bSend, BOOL bRecv) {
+    g_bInterceptSend = bSend;
+    g_bInterceptRecv = bRecv;
+}
+
+// ============================================================================
+// 响应等待器实现
+// ============================================================================
+
+CRITICAL_SECTION ResponseWaiter::s_cs;
+CONDITION_VARIABLE ResponseWaiter::s_cv;
+bool ResponseWaiter::s_responseReceived = false;
+uint32_t ResponseWaiter::s_receivedOpcode = 0;
+std::atomic<long> ResponseWaiter::s_waitingCount{0};  // 等待线程计数（真正的原子操作）
+
+void ResponseWaiter::Initialize() {
+    InitializeCriticalSection(&s_cs);
+    InitializeConditionVariable(&s_cv);
+}
+
+void ResponseWaiter::Cleanup() {
+    DeleteCriticalSection(&s_cs);
+}
+
+bool ResponseWaiter::WaitForResponse(
+    uint32_t expectedOpcode,
+    DWORD timeoutMs
+) {
+    if (expectedOpcode == 0 || timeoutMs == 0) {
+        return true;  // 不等待，直接返回
+    }
+
+    // 增加等待线程计数
+    s_waitingCount.fetch_add(1);
+
+    EnterCriticalSection(&s_cs);
+
+    // 重置状态
+    s_responseReceived = false;
+    s_receivedOpcode = 0;
+
+    // 简单等待：一次性等待，不循环检查
+    // 这样可以避免在收到错误响应后无限循环
+    BOOL result = SleepConditionVariableCS(
+        &s_cv,
+        &s_cs,
+        timeoutMs
+    );
+
+    // 检查是否收到期望的响应
+    bool received = (s_responseReceived && s_receivedOpcode == expectedOpcode);
+
+    LeaveCriticalSection(&s_cs);
+
+    // 减少等待线程计数
+    s_waitingCount.fetch_sub(1);
+
+    return received;
+}
+
+void ResponseWaiter::NotifyResponse(uint32_t opcode) {
+    // 快速检查：如果没有等待线程，直接返回，避免加锁
+    if (s_waitingCount.load() == 0) {
+        return;
+    }
+
+    EnterCriticalSection(&s_cs);
+    s_responseReceived = true;
+    s_receivedOpcode = opcode;
+    LeaveCriticalSection(&s_cs);
+    WakeConditionVariable(&s_cv);
+}
+
+void ResponseWaiter::CancelWait() {
+
+    EnterCriticalSection(&s_cs);
+
+    s_responseReceived = true;
+
+    LeaveCriticalSection(&s_cs);
+
+    WakeConditionVariable(&s_cv);
+
+}
+
+
+
+// ============================================================================
+
+// ResponseDispatcher 实现
+
+// ============================================================================
+
+
+
+ResponseDispatcher& ResponseDispatcher::Instance() {
+
+    static ResponseDispatcher instance;
+
+    return instance;
+
+}
+
+
+
+uint64_t ResponseDispatcher::MakeKey(uint32_t opcode, uint32_t params) {
+
+    return (static_cast<uint64_t>(opcode) << 32) | static_cast<uint64_t>(params);
+
+}
+
+
+
+BOOL ResponseDispatcher::Register(uint32_t opcode, ResponseHandler handler) {
+
+    if (!handler) return FALSE;
+
+    
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    m_opcodeOnlyHandlers[opcode] = handler;
+
+    return TRUE;
+
+}
+
+
+
+BOOL ResponseDispatcher::Register(uint32_t opcode, uint32_t params, ResponseHandler handler) {
+
+    if (!handler) return FALSE;
+
+    
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    uint64_t key = MakeKey(opcode, params);
+
+    m_handlers[key] = handler;
+
+    return TRUE;
+
+}
+
+
+
+void ResponseDispatcher::Unregister(uint32_t opcode, uint32_t params) {
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    
+
+    if (params == 0xFFFFFFFF) {
+
+        // 注销所有该opcode的处理器
+
+        m_opcodeOnlyHandlers.erase(opcode);
+
+        // 同时移除带params的处理器
+
+        for (auto it = m_handlers.begin(); it != m_handlers.end(); ) {
+
+            if ((it->first >> 32) == opcode) {
+
+                it = m_handlers.erase(it);
+
+            } else {
+
+                ++it;
+
+            }
+
+        }
+
+    } else {
+
+        uint64_t key = MakeKey(opcode, params);
+
+        m_handlers.erase(key);
+
+    }
+
+}
+
+
+
+BOOL ResponseDispatcher::Dispatch(const GamePacket& packet) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    
+
+    // 1. 首先尝试匹配 Opcode + Params
+
+    uint64_t key = MakeKey(packet.opcode, packet.params);
+
+    auto it = m_handlers.find(key);
+
+    if (it != m_handlers.end() && it->second) {
+
+        it->second(packet);
+
+        return TRUE;
+
+    }
+
+    
+
+    // 2. 然后尝试仅匹配 Opcode
+
+    auto it2 = m_opcodeOnlyHandlers.find(packet.opcode);
+
+    if (it2 != m_opcodeOnlyHandlers.end() && it2->second) {
+
+        it2->second(packet);
+
+        return TRUE;
+
+    }
+
+    
+
+    return FALSE;
+
+}
+
+
+
+void ResponseDispatcher::Clear() {
+
+
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+
+
+    m_handlers.clear();
+
+
+
+    m_opcodeOnlyHandlers.clear();
+
+
+
+}
+
+
+
+
+
+
+
+void ResponseDispatcher::InitializeDefaultHandlers() {
+
+
+
+    // 清除之前的处理器（防止重复注册）
+
+
+
+    Clear();
+
+
+
+    
+
+
+
+    // 战斗相关 - 仅匹配Opcode
+
+
+
+    Register(Opcode::BATTLE_START, [](const GamePacket& gp) {
+
+
+
+        PacketParser::ProcessBattlePacket(gp);
+
+
+
+    });
+
+
+
+    Register(Opcode::BATTLE_ROUND_START, [](const GamePacket& gp) {
+
+
+
+        PacketParser::ProcessBattlePacket(gp);
+
+
+
+    });
+
+
+
+    Register(Opcode::BATTLE_ROUND, [](const GamePacket& gp) {
+
+
+
+        PacketParser::ProcessBattlePacket(gp);
+
+
+
+    });
+
+
+
+    Register(Opcode::BATTLE_END, [](const GamePacket& gp) {
+
+
+
+        PacketParser::ProcessBattlePacket(gp);
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 灵玉相关
+
+
+
+    Register(Opcode::LINGYU_LIST, [](const GamePacket& gp) {
+
+
+
+        PacketParser::ProcessLingyuPacket(gp);
+
+
+
+    });
+
+
+
+    Register(Opcode::DECOMPOSE_RESPONSE, [](const GamePacket& gp) {
+
+
+
+        HandleDecomposeResponse();
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 妖怪背包
+
+
+
+    Register(Opcode::MONSTER_LIST, [](const GamePacket& gp) {
+
+
+
+        PacketParser::ProcessMonsterPacket(gp);
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 进入世界
+
+
+
+    Register(Opcode::ENTER_WORLD, ProcessEnterWorldPacket);
+
+
+
+    
+
+
+
+    // 进入地图
+
+
+
+    Register(Opcode::ENTER_SCENE_BACK, [](const GamePacket& gp) {
+
+
+
+        g_danceState.enteredMap = true;
+
+
+
+        {
+
+
+
+            CriticalSectionLock lock(g_towerCS);
+
+
+
+            g_towerMapEntered = true;
+
+
+
+        }
+
+
+
+        g_heavenFuruiEnteredMap = true;
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 深度挖宝
+
+
+
+    Register(Opcode::DEEP_DIG_BACK, ProcessDeepDigResponse);
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, 668, ProcessDeepDigQueryResponse);
+
+
+
+    
+
+
+
+    // 跳舞大赛
+
+
+
+    Register(Opcode::DANCE_ACTIVITY_BACK, ProcessDanceActivityResponse);
+
+
+
+    Register(Opcode::DANCE_STAGE_BACK, ProcessDanceStageResponse);
+
+
+
+    
+
+
+
+    // 试炼活动
+
+
+
+    Register(Opcode::TRIAL_BACK, 142, ProcessTrialResponse);
+
+
+
+    
+
+
+
+    // 玄塔活动
+
+
+
+    Register(Opcode::TRIAL_BACK, 341, ProcessTowerActivityResponse);
+
+
+
+    
+
+
+
+    // 采集
+
+
+
+    Register(Opcode::COLLECT_STATUS_BACK, ProcessCollectResponse);
+
+
+
+    
+
+
+
+    // 背包数据
+
+
+
+    Register(Opcode::REQ_PACKAGE_DATA_BACK, ProcessPackageDataResponse);
+
+
+
+    
+
+
+
+    // 新活动协议（按params分发）
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, StrawberryPick::ACTIVITY_ID, ProcessStrawberryResponse);
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, Act643::ACTIVITY_ID, ProcessAct643Response);
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, Act768::ACTIVITY_ID, ProcessAct768Response);
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, Act778::ACTIVITY_ID, ProcessAct778Response);
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, Act793::ACTIVITY_ID, ProcessAct793Response);
+
+
+
+    
+
+
+
+    // 福瑞宝箱
+
+
+
+    Register(Opcode::HEAVEN_FURUI_BACK, HeavenFurui::ACTIVITY_ID, ProcessHeavenFuruiResponse);
+
+
+
+    Register(Opcode::ACTIVITY_QUERY_BACK, HeavenFurui::ACTIVITY_ID, ProcessHeavenFuruiResponse);
+
+
+
+    
+
+
+
+    // 万妖盛会
+
+
+
+    Register(Opcode::BATTLESIX_COMBAT_INFO_BACK, ProcessBattleSixCombatInfoResponse);
+
+
+
+    Register(Opcode::BATTLESIX_MATCH_BACK, ProcessBattleSixMatchResponse);
+
+
+
+    Register(Opcode::BATTLESIX_PREPARE_COMBAT_BACK, ProcessBattleSixPrepareCombatResponse);
+
+
+
+    Register(Opcode::BATTLESIX_REQ_START_BACK, ProcessBattleSixReqStartResponse);
+
+
+
+    Register(Opcode::BATTLESIX_BATTLE_START_BACK, ProcessBattleSixBattleStartResponse);
+
+
+
+    Register(Opcode::BATTLESIX_BATTLE_ROUND_START_BACK, ProcessBattleSixBattleRoundStartResponse);
+
+
+
+    Register(Opcode::BATTLESIX_BATTLE_ROUND_RESULT_BACK, ProcessBattleSixBattleRoundResultResponse);
+
+
+
+        Register(Opcode::BATTLESIX_BATTLE_END_BACK, ProcessBattleSixBattleEndResponse);
+
+
+
+    
+
+
+
+    // 双台谷刷级（使用通用战斗响应Opcode）
+
+
+
+    Register(ShuangTai::BATTLE_START_BACK, ProcessShuangTaiBattleStartResponse);
+
+
+
+    Register(ShuangTai::BATTLE_ROUND_START_BACK, ProcessShuangTaiBattleRoundStartResponse);
+
+
+
+    Register(ShuangTai::BATTLE_ROUND_RESULT_BACK, ProcessShuangTaiBattleRoundResultResponse);
+
+
+
+    Register(ShuangTai::BATTLE_END_BACK, ProcessShuangTaiBattleEndResponse);
+
+
+
+    }
+
+
+
+    
+
+
+
+    // ============================================================================
+
+
+
+    // ActivityStateManager 实现
+
+
+
+
+
+
+    
+
+
+
+    
+
+
+
+    ActivityStateManager& ActivityStateManager::Instance() {
+        static ActivityStateManager instance;
+        return instance;
+    }
+
+    Act643State& ActivityStateManager::GetAct643State() {
+        return m_act643State;
+    }
+
+    StrawberryState& ActivityStateManager::GetStrawberryState() {
+        return m_strawberryState;
+    }
+
+    TrialState& ActivityStateManager::GetTrialState() {
+        return m_trialState;
+    }
+
+        void ActivityStateManager::ResetAll() {
+
+            m_act643State.Reset();
+
+            m_strawberryState.Reset();
+
+            m_trialState.Reset();
+
+            m_act768State.Reset();
+
+            m_act778State.Reset();
+
+            m_act793State.Reset();
+
+        }
+
+    
+
+        Act768State& ActivityStateManager::GetAct768State() {
+
+            return m_act768State;
+
+        }
+
+    
+
+        Act778State& ActivityStateManager::GetAct778State() {
+
+            return m_act778State;
+
+        }
+
+    
+
+        Act793State& ActivityStateManager::GetAct793State() {
+
+            return m_act793State;
+
+        }
+
+    
+
+            // ============================================================================
+
+
+
+    // 封包发送（带超时、重试和自动等待响应）
+
+
+
+    // ============================================================================
+
+
+
+    
+
+
+
+    BOOL SendPacket(SOCKET s, const BYTE* pData, DWORD dwSize, uint32_t expectedOpcode, DWORD timeoutMs) {
+
+    SOCKET targetSocket = (s != 0) ? s : g_LastGameSocket;
+
+    if (targetSocket == 0) {
+        return FALSE;
+    }
+
+
+
+    // 设置发送超时（5秒）
+
+    DWORD sendTimeout = 5000;
+
+    DWORD originalTimeout = 0;
+
+    int optLen = sizeof(originalTimeout);
+
+    getsockopt(targetSocket, SOL_SOCKET, SO_SNDTIMEO,
+
+               (char*)&originalTimeout, &optLen);
+
+    setsockopt(targetSocket, SOL_SOCKET, SO_SNDTIMEO,
+
+               (char*)&sendTimeout, sizeof(sendTimeout));
+
+
+
+    // 重试循环（最多3次）
+    for (int retry = 0; retry < 3; retry++) {
+        if (retry > 0) {
+            Sleep(500);  // 重试延迟500ms
+        }
+
+        // 每次重试时重新获取套接字（因为 g_LastGameSocket 可能会更新）
+        targetSocket = (s != 0) ? s : g_LastGameSocket;
+        if (targetSocket == 0) {
+            // 套接字无效，等待500ms后继续下一次重试
+            if (retry < 2) {
+                Sleep(500);
+                continue;
+            }
+            // 最后一次重试仍然无效，返回失败
+            return FALSE;
+        }
+
+        int result = send(targetSocket, reinterpret_cast<const char*>(pData),
+                                  static_cast<int>(dwSize), 0);
+
+        // 恢复原始超时
+
+        if (retry == 0 || result != SOCKET_ERROR) {
+
+            setsockopt(targetSocket, SOL_SOCKET, SO_SNDTIMEO,
+
+                       (char*)&originalTimeout, sizeof(originalTimeout));
+
+        }
+
+
+
+        if (result == SOCKET_ERROR) {
+
+            int error = WSAGetLastError();
+
+
+
+            // 超时 - 继续重试
+
+            if (error == WSAETIMEDOUT) {
+
+                retry++;
+                continue;
+
+            }
+
+
+
+            // 连接断开 - 不再重试
+
+            if (error == WSAECONNRESET || error == WSAECONNABORTED) {
+
+                return FALSE;
+
+            }
+
+
+
+            // 其他错误 - 重试
+
+            continue;
+
+        }
+
+
+
+        // 发送成功
+        if (result != static_cast<int>(dwSize)) {
+            return FALSE;
+        }
+
+        // 如果需要等待响应，只在第一次成功发送时等待
+        if (expectedOpcode != 0 && timeoutMs > 0 && retry == 0) {
+            bool received = ResponseWaiter::WaitForResponse(expectedOpcode, timeoutMs);
+            if (!received) {
+                // 等待响应超时不算发送失败，只是没收到响应
+                return FALSE;
+            }
+        }
+
+        return TRUE;
+
+    }
+
+
+
+    // 所有重试都失败
+
+    return FALSE;
+
+}
+// ============================================================================
+
+VOID ClearPacketList() {
+    if (!g_bInitialized) return;
+    
+    CriticalSectionLock lock(g_packetListCS.Get());
+    for (auto& packet : g_PacketList) {
+        delete[] packet.pData;
+        packet.pData = nullptr;
+    }
+    g_PacketList.clear();
+}
+
+VOID DeleteSelectedPackets(const std::vector<DWORD>& indices) {
+    if (!g_bInitialized) return;
+    
+    CriticalSectionLock lock(g_packetListCS.Get());
+    
+    // 从大到小排序，避免索引偏移
+    std::vector<DWORD> sortedIndices = indices;
+    std::sort(sortedIndices.begin(), sortedIndices.end(), std::greater<DWORD>());
+    
+    for (DWORD index : sortedIndices) {
+        if (index < g_PacketList.size()) {
+            delete[] g_PacketList[index].pData;
+            g_PacketList.erase(g_PacketList.begin() + index);
+        }
+    }
+}
+
+DWORD GetPacketCount() {
+    CriticalSectionLock lock(g_packetListCS.Get());
+    return static_cast<DWORD>(g_PacketList.size());
+}
+
+BOOL GetPacket(DWORD index, PPACKET pPacket) {
+    if (!pPacket) return FALSE;
+    
+    CriticalSectionLock lock(g_packetListCS.Get());
+    if (index >= g_PacketList.size()) {
+        return FALSE;
+    }
+    
+    *pPacket = g_PacketList[index];
+    return TRUE;
+}
+
+// ============ 灵玉相关功能实现 ============
+
+// 将字符串转换为十六进制字节数组
+static std::vector<BYTE> StringToHexBytes(const std::string& str) {
+    std::vector<BYTE> result;
+    for (size_t i = 0; i < str.length(); i++) {
+        result.push_back(static_cast<BYTE>(str[i]));
+    }
+    return result;
+}
+
+// 解析 JSON 数组字符串，如 ["37","52"] 或 ['37','52']，返回 "37_52" 格式
+static std::string ParseIndicesArray(const std::wstring& jsonArray) {
+    std::string result;
+
+    // 直接转换为 ANSI 字符串
+    int len = WideCharToMultiByte(CP_ACP, 0, jsonArray.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) {
+        return result;
+    }
+
+    std::string jsonA(len, 0);
+    WideCharToMultiByte(CP_ACP, 0, jsonArray.c_str(), -1, &jsonA[0], len, nullptr, nullptr);
+
+    // 移除空白，并将单引号替换为双引号
+    std::string clean;
+    for (char c : jsonA) {
+        if (!isspace((unsigned char)c)) {
+            if (c == '\'') clean += '"';  // 单引号转双引号
+            else clean += c;
+        }
+    }
+
+    // 查找 [ 和 ]
+    size_t start = clean.find('[');
+    size_t end = clean.find(']');
+    if (start == std::string::npos || end == std::string::npos || end <= start) {
+        return result;
+    }
+
+    std::string content = clean.substr(start + 1, end - start - 1);
+
+    // 用逗号分割
+    size_t pos = 0;
+    bool first = true;
+    while (pos < content.length()) {
+        size_t nextComma = content.find(',', pos);
+        std::string item;
+        if (nextComma == std::string::npos) {
+            item = content.substr(pos);
+            pos = content.length();
+        } else {
+            item = content.substr(pos, nextComma - pos);
+            pos = nextComma + 1;
+        }
+
+        // 移除引号
+        size_t q1 = item.find('"');
+        size_t q2 = item.find_last_of('"');
+        if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+            item = item.substr(q1 + 1, q2 - q1 - 1);
+        }
+
+        if (!item.empty()) {
+            if (!first) result += "_";
+            result += item;
+            first = false;
+        }
+    }
+
+    return result;
+}
+
+// 发送查询灵玉封包（2个封包）
+BOOL SendQueryLingyuPacket() {
+    // 查询灵玉背包列表（背包中的灵玉）
+    // sendMessage(MsgDoc.OP_CLIENT_SPIRIT_EQUIP_ALL.send, userId, [1])
+    // 封包格式: Magic(2) + Length(2) + Opcode(4) + Params(4) + Body(8)
+    // Body: 数组长度(4字节) + 元素值(4字节)
+    
+    // 检查是否有卡布号
+    if (g_userId == 0) {
+        return FALSE;
+    }
+    
+    // 查询封包1: 查询背包中的灵玉 (params=userId, body=[1])
+    // Opcode: 1185809 (0x00121811)
+    BYTE packet1[20] = {
+        0x44, 0x53,  // Magic: "SD"
+        0x08, 0x00,  // Length: 8 bytes (数组长度4 + 元素值4)
+        0x11, 0x18, 0x12, 0x00,  // Opcode: 0x00121811 (1185809)
+        0x00, 0x00, 0x00, 0x00,  // Params: userId (动态填充)
+        0x01, 0x00, 0x00, 0x00,  // Body: 数组长度 = 1
+        0x01, 0x00, 0x00, 0x00   // Body: 元素值 = 1 (背包灵玉)
+    };
+    // 填充卡布号到Params字段 (小端序)
+    packet1[8] = static_cast<BYTE>(g_userId & 0xFF);
+    packet1[9] = static_cast<BYTE>((g_userId >> 8) & 0xFF);
+    packet1[10] = static_cast<BYTE>((g_userId >> 16) & 0xFF);
+    packet1[11] = static_cast<BYTE>((g_userId >> 24) & 0xFF);
+
+    // 查询封包2: 查询已装备的灵玉 (params=userId, body=[2])
+    // Opcode: 1185809 (0x00121811)
+    BYTE packet2[20] = {
+        0x44, 0x53,  // Magic: "SD"
+        0x08, 0x00,  // Length: 8 bytes
+        0x11, 0x18, 0x12, 0x00,  // Opcode: 0x00121811 (1185809)
+        0x00, 0x00, 0x00, 0x00,  // Params: userId (动态填充)
+        0x01, 0x00, 0x00, 0x00,  // Body: 数组长度 = 1
+        0x02, 0x00, 0x00, 0x00   // Body: 元素值 = 2 (已装备灵玉)
+    };
+    // 填充卡布号到Params字段 (小端序)
+    packet2[8] = static_cast<BYTE>(g_userId & 0xFF);
+    packet2[9] = static_cast<BYTE>((g_userId >> 8) & 0xFF);
+    packet2[10] = static_cast<BYTE>((g_userId >> 16) & 0xFF);
+    packet2[11] = static_cast<BYTE>((g_userId >> 24) & 0xFF);
+
+    BOOL result1 = SendPacket(0, packet1, sizeof(packet1));
+
+    // 延迟300ms发送第二个封包
+    Sleep(300);
+
+    BOOL result2 = SendPacket(0, packet2, sizeof(packet2));
+
+    return result1 && result2;
+}
+
+// 发送查询背包封包（2个包）
+BOOL SendQueryBagPacket() {
+    // 查询封包1: 44 53 00 00 18 18 12 00 00 00 00 00
+    BYTE packet1[] = {
+        0x44, 0x53,  // Magic: "SD"
+        0x00, 0x00,  // Length: 0x0000
+        0x18, 0x18, 0x12, 0x00,  // Opcode: 0x00121818
+        0x00, 0x00, 0x00, 0x00   // Params: 0
+    };
+
+    // 查询封包2: 44 53 00 00 11 10 12 00 FF FF FF FF
+    BYTE packet2[] = {
+        0x44, 0x53,  // Magic: "SD"
+        0x00, 0x00,  // Length: 0x0000
+        0x11, 0x10, 0x12, 0x00,  // Opcode: 0x00121011
+        0xFF, 0xFF, 0xFF, 0xFF   // Params: 0xFFFFFFFF
+    };
+
+    BOOL result1 = SendPacket(0, packet1, sizeof(packet1));
+
+    // 延迟50ms发送第二个封包
+    Sleep(50);
+
+    BOOL result2 = SendPacket(0, packet2, sizeof(packet2));
+
+    return result1 && result2;
+}
+
+// 发送一键分解封包 - 异步版本
+// jsonArray: JSON数组字符串，如 ["37","52"]
+struct DecomposeTaskData {
+    std::string indices;
+    HWND hwnd;  // 窗口句柄用于发送消息
+};
+
+// 分解任务完成消息
+#define WM_DECOMPOSE_COMPLETE (WM_USER + 102)
+
+DWORD WINAPI DecomposeThreadProc(LPVOID lpParam) {
+    DecomposeTaskData* taskData = static_cast<DecomposeTaskData*>(lpParam);
+
+    // 立即启用阻止发送功能，阻止 1185792 和 1185809 的发送
+    g_blockOpcodeSend = true;
+
+    // 解析索引数组（例如 "62_61" -> ["62", "61"]）
+    std::vector<std::string> indexList;
+    std::string current;
+    for (size_t i = 0; i < taskData->indices.length(); i++) {
+        if (taskData->indices[i] == '_') {
+            if (!current.empty()) {
+                indexList.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += taskData->indices[i];
+        }
+    }
+    if (!current.empty()) {
+        indexList.push_back(current);
+    }
+
+    // 构建分解封包: 44 53 00 00 16 18 12 00 + 索引(4字节LE)
+    // 例如: 分解索引 1234 (0x04D2) -> 44 53 00 00 16 18 12 00 D2 04 00 00
+
+    // 将索引数组合并为一个字符串，用下划线连接
+    std::string indicesStr;
+    for (size_t i = 0; i < indexList.size(); i++) {
+        if (i > 0) indicesStr += "_";
+        indicesStr += indexList[i];
+    }
+
+    BOOL allSuccess = TRUE;
+
+    // 逐个分解每个灵玉
+    for (size_t i = 0; i < indexList.size(); i++) {
+        const auto& indexStr = indexList[i];
+
+        // 将字符串索引转换为整数
+        int indexValue = std::stoi(indexStr);
+
+        // 使用 PacketBuilder 构建分解封包
+        // Opcode: 1185814, Params: symmIndex
+        auto packet = PacketBuilder()
+            .SetOpcode(1185814)
+            .SetParams(static_cast<uint32_t>(indexValue))
+            .Build();
+
+        // 发送分解封包
+        BOOL result = SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+        
+        // 生成十六进制封包字符串并发送到UI
+        std::string hexPacket = HexToString(packet.data(), static_cast<DWORD>(packet.size())) + " ";
+
+        // 向UI线程发送十六进制封包信息
+        if (g_hWnd) {
+            HexPacketData* hexData = new HexPacketData();
+            hexData->len = hexPacket.length() + 1;
+            hexData->data = new char[hexData->len];
+            strcpy_s(hexData->data, hexData->len, hexPacket.c_str());
+    
+            PostMessage(g_hWnd, WM_DECOMPOSE_HEX_PACKET, (WPARAM)hexData, 0);
+        }
+    
+            // 延迟200ms再分解下一个，避免过快发送
+            if (&indexStr != &indexList.back()) {
+                Sleep(200);
+            }
+    
+            // 更新整体成功状态
+            allSuccess = allSuccess && result;
+        }
+
+    // 禁用阻止发送功能
+    g_blockOpcodeSend = false;
+
+    // 发送完成消息到UI线程
+    if (g_hWnd) {
+        PostMessage(g_hWnd, WM_DECOMPOSE_COMPLETE, (WPARAM)allSuccess, 0);
+    }
+    
+    // 清理内存
+    delete taskData;
+    
+    return allSuccess;
+}
+
+BOOL SendDecomposeLingyuPacket(const std::wstring& jsonArray) {
+    if (jsonArray.empty()) {
+        return FALSE;
+    }
+
+    // 解析 JSON 数组，构造 indices 字符串
+    std::string indices = ParseIndicesArray(jsonArray);
+    if (indices.empty()) {
+        return FALSE;
+    }
+
+    // 创建任务数据结构
+    DecomposeTaskData* taskData = new DecomposeTaskData();
+    taskData->indices = indices;
+    taskData->hwnd = g_hWnd;
+
+    // 创建新线程处理分解任务，避免阻塞主线程
+    HANDLE hThread = CreateThread(NULL, 0, DecomposeThreadProc, taskData, 0, NULL);
+    if (hThread) {
+        CloseHandle(hThread);
+        return TRUE;
+    } else {
+        delete taskData;
+        return FALSE;
+    }
+}
+
+// 发送查询妖怪背包封包
+// Opcode: 1187329, Params: 0
+BOOL SendQueryMonsterPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1187329)
+        .SetParams(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// ============ 日常活动功能实现 ============
+
+// 深度挖宝 - 发送开始游戏封包
+// Opcode: 1185525, Params: 12, Body: 6个int32(都是0)
+BOOL SendDeepDigPacket() {
+    g_deepDigState.waitingResponse = true;
+    g_deepDigState.sessionId = 0;
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(1185525)
+        .SetParams(12)
+        .WriteInt32(0)
+        .WriteInt32(0)
+        .WriteInt32(0)
+        .WriteInt32(0)
+        .WriteInt32(0)
+        .WriteInt32(0)
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 查询深度挖宝剩余次数
+// Opcode: 1185685, Params: 668, Body: "open_ui"字符串
+BOOL SendQueryDeepDigCountPacket() {
+    g_deepDigState.waitingQuery = true;
+
+    auto packet = PacketBuilder()
+        .SetOpcode(1185685)
+        .SetParams(668)
+        .WriteString("open_ui")
+        .Build();
+
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), Opcode::ACTIVITY_QUERY_BACK, 3000);
+}
+
+// 处理深度挖宝查询响应
+void ProcessDeepDigQueryResponse(const GamePacket& packet) {
+    if (!g_deepDigState.waitingQuery) return;
+    if (packet.body.size() < 12) return;
+    
+    const BYTE* body = packet.body.data();
+    size_t offset = 0;
+    
+    // 读取 UTF 字符串
+    if (offset + 2 > packet.body.size()) return;
+    uint16_t strLen = ReadUInt16LE(body, offset);
+    offset += 2 + strLen;
+    
+    // 读取剩余次数
+    if (offset + 4 > packet.body.size()) return;
+    g_deepDigState.remainingCount = ReadInt32LE(body, offset);
+    
+    g_deepDigState.waitingQuery = false;
+}
+
+// 深度挖宝线程数据
+struct DeepDigThreadData {
+    int targetCount;
+    HWND hwnd;
+};
+
+// 深度挖宝循环执行线程
+DWORD WINAPI DeepDigLoopThreadProc(LPVOID lpParam) {
+    DeepDigThreadData* data = static_cast<DeepDigThreadData*>(lpParam);
+    int targetCount = data->targetCount;
+    
+    // 先查询剩余次数
+    SendQueryDeepDigCountPacket();
+
+    // 确定实际执行次数
+    int actualCount = targetCount;
+    if (g_deepDigState.remainingCount > 0 &&
+        g_deepDigState.remainingCount < targetCount) {
+        actualCount = g_deepDigState.remainingCount;
+    }
+
+    // 循环执行
+    for (int i = 0; i < actualCount; i++) {
+        g_deepDigState.waitingResponse = true;
+        g_deepDigState.sessionId = 0;
+
+        // 发送开始游戏封包: Opcode=1185525, Params=12, Body=6个int32(0)
+        auto startPacket = PacketBuilder()
+            .SetOpcode(1185525)
+            .SetParams(12)
+            .WriteInt32(0)
+            .WriteInt32(0)
+            .WriteInt32(0)
+            .WriteInt32(0)
+            .WriteInt32(0)
+            .WriteInt32(0)
+            .Build();
+        SendPacket(0, startPacket.data(), static_cast<DWORD>(startPacket.size()), Opcode::DEEP_DIG_BACK, 5000);
+        
+        Sleep(500);
+        
+        // 发送结束游戏封包
+        if (g_deepDigState.sessionId > 0) {
+            // Opcode=1185525, Params=12, Body=[4, 0, 4, sessionId, 0, 0]
+            auto endPacket = PacketBuilder()
+                .SetOpcode(1185525)
+                .SetParams(12)
+                .WriteInt32(4)
+                .WriteInt32(0)
+                .WriteInt32(4)
+                .WriteInt32(g_deepDigState.sessionId)
+                .WriteInt32(0)
+                .WriteInt32(0)
+                .Build();
+            SendPacket(0, endPacket.data(), static_cast<DWORD>(endPacket.size()));
+        }
+        
+        g_deepDigState.completedCount++;
+        
+        if (i < actualCount - 1) {
+            Sleep(1000);
+        }
+    }
+    
+    // 发送完成消息
+    if (g_hWnd) {
+        PostMessage(g_hWnd, WM_DAILY_TASK_COMPLETE, 
+                    g_deepDigState.completedCount, actualCount);
+    }
+    
+    g_deepDigState.autoMode = false;
+    delete data;
+    return 0;
+}
+
+// 深度挖宝 - 执行N次
+BOOL SendDeepDigPacketNTimes(int count) {
+    if (count <= 0) count = WpeHook::DEEP_DIG_DEFAULT_COUNT;
+    if (g_deepDigState.autoMode) return FALSE;
+    
+    g_deepDigState.autoMode = true;
+    g_deepDigState.targetCount = count;
+    g_deepDigState.completedCount = 0;
+    
+    DeepDigThreadData* data = new DeepDigThreadData();
+    data->targetCount = count;
+    data->hwnd = g_hWnd;
+    
+    HANDLE hThread = CreateThread(NULL, 0, DeepDigLoopThreadProc, data, 0, NULL);
+    if (hThread) {
+        CloseHandle(hThread);
+        return TRUE;
+    } else {
+        g_deepDigState.autoMode = false;
+        delete data;
+        return FALSE;
+    }
+}
+
+// 深度挖宝 - 发送结束游戏封包
+// Opcode: 1185525, Params: 12, Body: [4, 0, 4, sessionId, 0, 0]
+static BOOL SendDeepDigEndPacket(int sessionId, int score) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1185525)
+        .SetParams(12)
+        .WriteInt32(4)
+        .WriteInt32(0)
+        .WriteInt32(4)
+        .WriteInt32(sessionId)
+        .WriteInt32(0)
+        .WriteInt32(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 处理深度挖宝响应
+void ProcessDeepDigResponse(const GamePacket& packet) {
+    if (!g_deepDigState.waitingResponse) return;
+    if (packet.body.size() < 8) return;
+    
+    const BYTE* body = packet.body.data();
+    size_t offset = 0;
+    
+    int32_t act = ReadInt32LE(body, offset);
+    int32_t result = ReadInt32LE(body, offset);
+    
+    if (act == 0) {
+        g_deepDigState.sessionId = result;
+        g_deepDigState.waitingResponse = false;
+        
+        CreateThread(NULL, 0, [](LPVOID) -> DWORD {
+            Sleep(500);
+            SendDeepDigEndPacket(g_deepDigState.sessionId, 4);
+            return 0;
+        }, NULL, 0, NULL);
+    }
+}
+
+// 每日卡牌
+// Opcode: 1184815, Params: 22
+BOOL SendDailyCardPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184815)
+        .SetParams(22)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 每日礼包
+// Opcode: 1186300 (OP_CLIENT_VIP_DAY_AWARD), Params: 0
+BOOL SendDailyGiftPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1186300)
+        .SetParams(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 每周礼包
+// Opcode: 1186290 (OP_CLIENT_VIP_WEEK_AWARD), Params: 0
+BOOL SendWeeklyGiftPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1186290)
+        .SetParams(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 家族考勤
+// Opcode: 1184770, Params: 0
+BOOL SendFamilyCheckinPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184770)
+        .SetParams(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 家族报道
+// Opcode: 1185336, Params: 0
+BOOL SendFamilyReportPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1185336)
+        .SetParams(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 家族保卫战
+// 发送3个封包
+BOOL SendFamilyDefendPacket() {
+    // 封包1: Opcode=1185313, Params=0, Body=[0]
+    auto packet1 = PacketBuilder()
+        .SetOpcode(1185313)
+        .SetParams(0)
+        .WriteInt32(0)
+        .Build();
+    SendPacket(0, packet1.data(), static_cast<DWORD>(packet1.size()));
+    Sleep(300);
+    
+    // 封包2: Opcode=1185313, Params=1, Body=[6]
+    auto packet2 = PacketBuilder()
+        .SetOpcode(1185313)
+        .SetParams(1)
+        .WriteInt32(6)
+        .Build();
+    SendPacket(0, packet2.data(), static_cast<DWORD>(packet2.size()));
+    Sleep(300);
+    
+    // 封包3: Opcode=1184801, Params=3
+    auto packet3 = PacketBuilder()
+        .SetOpcode(1184801)
+        .SetParams(3)
+        .Build();
+    SendPacket(0, packet3.data(), static_cast<DWORD>(packet3.size()));
+    
+    return TRUE;
+}
+
+// 商城惊喜
+// 循环发送3次: Opcode=1184833, Params=154, Body=[1]
+BOOL SendShopSurprisePacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(154)
+        .WriteInt32(1)
+        .Build();
+    
+    for (int i = 0; i < 3; i++) {
+        SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+        if (i < 2) Sleep(300);
+    }
+    
+    return TRUE;
+}
+
+// ============ 自动回血功能实现 ============
+
+// 发送贝贝回血封包
+// Opcode: 1186818, Params: 1
+BOOL SendBeibeiHealPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1186818)
+        .SetParams(1)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// ============ MD5图片验证自动回复 ============
+
+// 图片内容MD5 -> 正反值映射表 (1=正面/面向你, 0=反面/背向你)
+static std::unordered_map<std::string, int> g_md5FaceMap = {
+    {"6817be5af4b0e77f8446e5a007a4cc28", 0},
+    {"74b9314abf6f6cfd2238c6a6236eb5f6", 0},
+    {"4d622957f07627b2bc3709f70d669042", 0},
+    {"e17631cae5f6a80b47eeae71dbc3c33c", 1},
+    {"85a15ce5f34ab6603ee4f7eb22af4c0d", 1},
+    {"1278f375c7eb202feb67c119cc8e801b", 0},
+    {"a088db9ab3699ea8b5c93117b102c6b9", 0},
+    {"849fbb8920a2a65766fa5098265b9ac8", 0},
+    {"cb10d81505ded8aa0464b154365125bd", 0},
+    {"b8b14263e617489c74bd6a7a9dcdeec5", 0},
+    {"7b1dee29c9cc5abe3b33b16d84c86558", 1},
+    {"d3c48477832015bdf502f59c67af9e78", 1},
+    {"194edd9073b6202eae074c98c063cf09", 1},
+    {"a8ff055f0b9545a1452124552bb6f99d", 1},
+    {"727f5d15b8fc454d41e7821993006a00", 1},
+    {"05eff1b5db485099344d95b1b9335495", 1},
+    {"d273efe1270692d9f953b1f589939690", 1},
+    {"866eca22ca73a65ed0093d93e32d0ab9", 0},
+    {"564aac45bea2042e3a03c32de6d4d27a", 0},
+    {"e44739c71ec7522e9d2c11f48278f9d6", 0},
+    {"95e59bb35ab652f315acf02a90da65cf", 0},
+    {"5c923c72ec51f68216e50a7e57ebd390", 1},
+    {"822824d609cf40465093dccd880f6071", 1},
+    {"f22b2b947e75a434cf4e5d15f62b4058", 0},
+    {"e3a1e2e14c88b23513282fa79cf9b1ef", 0},
+    {"7d5d876c5a3ae740e3de8e3c9cff16d7", 1},
+    {"0c2cccca9f03980f122864b4f724aed2", 0},
+    {"dd1bd287a069788cd25c510b06b66513", 1},
+    {"5eeb80b7fc6502a260ff0f6026690d53", 0},
+    {"6fb5816f27fc166abaae49e9467ba4cb", 0},
+    {"fb68bfa2140cc9d15d0a2115c80f6680", 1},
+    {"073c262eb6b27fcd23c393ad19c74a6e", 0},
+    {"85405a09136a8adb0c8dce3c623cecb0", 1},
+    {"3ab7e8982f30bbc13250352df96aa3ee", 1},
+    {"930a7013354000a2eb5d3bdcb93b303c", 1},
+    {"8893db073a63d2f0af703a640ebeab89", 1},
+    {"fb767d00dd3ebb1974801bfe80a56800", 0},
+    {"8c0f86fc2e4555b0dbb737624d95be0f", 0},
+    {"6fcfa01f4faf1198b683449ccca8b1de", 1},
+    {"39e78f92c6e6041536b73287cf778668", 1}
+};
+
+// 下载图片并计算MD5 (POST方式)
+static std::string DownloadImageAndGetMD5(const std::string& imageMd5) {
+    HINTERNET hSession = WinHttpOpen(L"MD5CheckBot/1.0", 
+                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME, 
+                                      WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return "";
+    
+    HINTERNET hConnect = WinHttpConnect(hSession, L"php.wanwan4399.com", 
+                                         INTERNET_DEFAULT_HTTP_PORT, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+    
+    // POST 方式
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/game_guard/image.php",
+                                            NULL, WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+    
+    // POST 数据: md5=xxx
+    std::string postData = "md5=" + imageMd5;
+    
+    // 发送请求
+    std::string result;
+    LPCWSTR headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
+    if (WinHttpSendRequest(hRequest, headers, -1,
+                           (LPVOID)postData.data(), (DWORD)postData.size(),
+                           (DWORD)postData.size(), 0)) {
+        if (WinHttpReceiveResponse(hRequest, NULL)) {
+            DWORD dwSize = 0;
+            DWORD dwDownloaded = 0;
+            do {
+                dwSize = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+                if (dwSize == 0) break;
+                
+                std::vector<char> buffer(dwSize);
+                if (!WinHttpReadData(hRequest, buffer.data(), dwSize, &dwDownloaded)) break;
+                result.append(buffer.data(), dwDownloaded);
+            } while (dwSize > 0);
+        }
+    }
+    
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    
+    if (result.empty()) return "";
+    
+    // 计算MD5
+    HCRYPTPROV hProv = 0;
+    HCRYPTHASH hHash = 0;
+    BYTE rgbHash[16];
+    DWORD cbHash = 16;
+    
+    if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
+        return "";
+    }
+    if (!CryptCreateHash(hProv, CALG_MD5, 0, 0, &hHash)) {
+        CryptReleaseContext(hProv, 0);
+        return "";
+    }
+    if (!CryptHashData(hHash, (BYTE*)result.data(), (DWORD)result.size(), 0)) {
+        CryptDestroyHash(hHash);
+        CryptReleaseContext(hProv, 0);
+        return "";
+    }
+    if (!CryptGetHashParam(hHash, HP_HASHVAL, rgbHash, &cbHash, 0)) {
+        CryptDestroyHash(hHash);
+        CryptReleaseContext(hProv, 0);
+        return "";
+    }
+    
+    CryptDestroyHash(hHash);
+    CryptReleaseContext(hProv, 0);
+    
+    // 转为十六进制字符串
+    char hex[33];
+    for (int i = 0; i < 16; i++) {
+        sprintf_s(hex + i * 2, 3, "%02x", rgbHash[i]);
+    }
+    hex[32] = '\0';
+    
+    return std::string(hex);
+}
+
+// 查找图片正反值
+static int FindFaceValue(const std::string& imageContentMd5) {
+    auto it = g_md5FaceMap.find(imageContentMd5);
+    if (it != g_md5FaceMap.end()) {
+        return it->second;
+    }
+    return -1;  // 未找到
+}
+
+// 计算正确的验证索引
+static int CalculateCorrectIndex(const std::vector<std::string>& imageMd5s, int verifyType) {
+    // verifyType: 1=面向你(找正面), 其他=背向你(找反面)
+    // 正面=1, 反面=0
+    
+    int targetValue = (verifyType == 1) ? 1 : 0;
+    
+    std::vector<int> faceValues;
+    for (const auto& md5 : imageMd5s) {
+        std::string contentMd5 = DownloadImageAndGetMD5(md5);
+        if (contentMd5.empty()) {
+            faceValues.push_back(-1);
+            continue;
+        }
+        int value = FindFaceValue(contentMd5);
+        faceValues.push_back(value);
+    }
+    
+    // 统计目标值数量
+    int targetCount = 0;
+    int firstTargetIndex = -1;
+    int firstOtherIndex = -1;
+    
+    for (int i = 0; i < 4; i++) {
+        if (faceValues[i] == targetValue) {
+            targetCount++;
+            if (firstTargetIndex < 0) firstTargetIndex = i;
+        } else if (faceValues[i] >= 0 && firstOtherIndex < 0) {
+            firstOtherIndex = i;
+        }
+    }
+    
+    // 如果只有1个目标值，返回其索引
+    if (targetCount == 1 && firstTargetIndex >= 0) {
+        return firstTargetIndex;
+    }
+    // 否则返回第一个其他值（或第一个目标值）
+    if (firstOtherIndex >= 0) return firstOtherIndex;
+    if (firstTargetIndex >= 0) return firstTargetIndex;
+    
+    return 0;  // 默认返回0
+}
+
+// MD5验证回复封包
+// Opcode: 1186193, Params: index (0-3)
+BOOL SendMD5CheckReplyPacket(int index) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1186193)
+        .SetParams(static_cast<uint32_t>(index))
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 处理MD5验证封包并自动回复
+void ProcessMD5CheckAndReply(const std::vector<BYTE>& body, uint32_t params) {
+    // 先解压 body 数据（Flash ByteArray.uncompress() 格式）
+    std::vector<uint8_t> decompressed;
+    
+    // 获取 zlib uncompress 函数
+    auto uncompressFunc = GetZlibUncompress();
+    if (uncompressFunc && !body.empty()) {
+        // 检查 zlib 头 (0x78 表示 zlib 格式)
+        if (body.size() >= 2 && body[0] == 0x78) {
+            // 预分配解压缓冲区（通常是压缩前的4-10倍）
+            decompressed.resize(body.size() * 10);
+            unsigned long destLen = static_cast<unsigned long>(decompressed.size());
+            
+            int res = uncompressFunc(decompressed.data(), &destLen, body.data(), static_cast<unsigned long>(body.size()));
+            if (res == 0) {
+                decompressed.resize(destLen);
+            } else {
+                // 解压失败，使用原始数据
+                decompressed.assign(body.begin(), body.end());
+            }
+        } else {
+            // 不是 zlib 格式，直接使用原始数据
+            decompressed.assign(body.begin(), body.end());
+        }
+    } else {
+        decompressed.assign(body.begin(), body.end());
+    }
+    
+    // 从解压后的数据中提取4个UTF字符串（图片MD5值）
+    std::vector<std::string> imageMd5s;
+    size_t offset = 0;
+    
+    for (int i = 0; i < 4 && offset < decompressed.size(); i++) {
+        // UTF字符串格式：长度(2字节小端) + 内容
+        if (offset + 2 > decompressed.size()) break;
+        
+        uint16_t strLen = decompressed[offset] | (decompressed[offset + 1] << 8);
+        offset += 2;
+        
+        if (offset + strLen > decompressed.size()) break;
+        
+        std::string md5(decompressed.begin() + offset, decompressed.begin() + offset + strLen);
+        imageMd5s.push_back(md5);
+        offset += strLen;
+    }
+    
+    if (imageMd5s.size() < 4) return;
+    
+    // 计算正确索引
+    int correctIndex = CalculateCorrectIndex(imageMd5s, params);
+    
+    // 发送回复
+    SendMD5CheckReplyPacket(correctIndex);
+}
+
+// ============ 试炼活动功能实现（重构版） ============
+
+// 试炼活动响应 Opcode
+// 封包字节 "41 2E 14 00" -> 0x00142E41 -> 1324097
+#define OPCODE_TRIAL_BACK 1324097
+
+// 试炼活动全局变量
+static int g_trialCheckCode = 0;           // 校验码
+static int g_trialGameCount = 0;           // 游戏次数
+static int g_trialCoolTime = 0;            // 冷却时间
+static int g_trialAwardNum = 0;            // 印记数量
+static bool g_waitingTrialResponse = false; // 等待响应标志
+static bool g_trialComplete = false;        // 试炼完成标志
+
+// 试炼类型枚举
+enum class TrialType {
+    FireWind,  // 火风试炼
+    Fire,      // 火焰试炼
+    Storm      // 风暴试炼
+};
+
+// 试炼配置结构（从AS3代码分析得出）
+struct TrialConfig {
+    TrialType type;
+    int startOp;       // 开始游戏协议ID
+    int endOp;         // 结束游戏协议ID
+    int infoOp;        // 基础信息协议ID
+    int award;         // 奖励印记数量
+    int checkCodeFactor;  // 校验码系数
+    const wchar_t* name; // 试炼名称（用于UI显示）
+};
+
+// 三种试炼的配置
+static const TrialConfig TRIAL_CONFIGS[] = {
+    {TrialType::FireWind, 24, 25, 21, 450, 56, L"火风试炼"},
+    {TrialType::Fire,      4,  5,  1, 350, 56, L"火焰试炼"},
+    {TrialType::Storm,    14, 15, 11, 450, 72, L"风暴试炼"}
+};
+
+// 试炼线程函数声明
+DWORD WINAPI TrialThreadProc(LPVOID lpParam);
+
+// 通用试炼封包发送函数
+// Opcode: 1184833 (0x00121441), Params: 142
+// Body格式: [protocolId, ...其他参数]
+static BOOL SendTrialPacket(const std::vector<int32_t>& bodyValues, uint32_t expectedOpcode = 0, DWORD timeoutMs = 0) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(142)
+        .WriteInt32Array(bodyValues)
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), expectedOpcode, timeoutMs);
+}
+
+// 根据试炼类型获取配置
+inline const TrialConfig& GetTrialConfig(TrialType type) {
+    return TRIAL_CONFIGS[static_cast<int>(type)];
+}
+
+// ============ 通用试炼函数 ============
+
+// 开始试炼游戏（通用）
+static BOOL SendStartTrialPacket(TrialType type) {
+    const TrialConfig& config = GetTrialConfig(type);
+    g_trialComplete = false;
+    g_waitingTrialResponse = true;
+    
+    // 发送封包并等待响应
+    BOOL result = SendTrialPacket({config.startOp}, Opcode::TRIAL_BACK, 5000);
+    if (!result) {
+        g_waitingTrialResponse = false;
+        return FALSE;
+    }
+    
+    // 等待试炼线程完成（最多5秒）
+    for (int i = 0; i < 50 && !g_trialComplete; i++) {
+        Sleep(100);
+    }
+    
+    return g_trialComplete;
+}
+
+// 结束试炼游戏（通用）
+static BOOL SendEndTrialPacket(TrialType type, int result, int award, int checkCode) {
+    const TrialConfig& config = GetTrialConfig(type);
+    return SendTrialPacket({config.endOp, result, award, checkCode});
+}
+
+// ============ 试炼对外接口函数 ============
+
+// 火风试炼
+BOOL SendFireWindTrialPacket() { return SendStartTrialPacket(TrialType::FireWind); }
+BOOL SendFireWindEndPacket(int result, int awardCount, int checkCode) {
+    return SendEndTrialPacket(TrialType::FireWind, result, awardCount, checkCode);
+}
+
+// 火焰试炼
+BOOL SendFireTrialPacket() { return SendStartTrialPacket(TrialType::Fire); }
+BOOL SendFireEndPacket(int result, int awardCount, int checkCode) {
+    return SendEndTrialPacket(TrialType::Fire, result, awardCount, checkCode);
+}
+
+// 风暴试炼
+BOOL SendStormTrialPacket() { return SendStartTrialPacket(TrialType::Storm); }
+BOOL SendStormEndPacket(int exitStatus, int brand, int checkCode) {
+    return SendEndTrialPacket(TrialType::Storm, exitStatus, brand, checkCode);
+}
+
+// 试炼线程参数结构
+struct TrialThreadParam {
+    int checkCode;
+    TrialType type;
+};
+
+// 处理试炼活动响应（在HookedRecv中调用）
+// Opcode: 1324097 (0x00142E41), Params: 142
+// Body格式: [protocolId, ...]
+void ProcessTrialResponse(const GamePacket& packet) {
+    if (packet.body.size() < 4) return;
+    
+    const BYTE* body = packet.body.data();
+    size_t offset = 0;
+    
+    // 读取 protocolId
+    int32_t protocolId = ReadInt32LE(body, offset);
+    
+    // 读取 result
+    int32_t result = 0;
+    if (offset + 4 <= packet.body.size()) {
+        result = ReadInt32LE(body, offset);
+    }
+    
+    // 根据protocolId处理不同响应
+    switch (protocolId) {
+        case 4:   // 火焰试炼开始
+        case 24:  // 火风试炼开始
+        case 14:  // 风暴试炼开始
+            if (result == 0 && offset + 4 <= packet.body.size()) {
+                // 根据protocolId确定试炼类型
+                TrialType type = (protocolId == 4) ? TrialType::Fire :
+                                (protocolId == 24) ? TrialType::FireWind : TrialType::Storm;
+                const TrialConfig& config = GetTrialConfig(type);
+                
+                // 获取校验码并计算真正的校验码
+                int32_t checkCode = ReadInt32LE(body, offset);
+                g_trialCheckCode = checkCode * config.checkCodeFactor + (g_userId % 100000);
+                g_waitingTrialResponse = false;
+                
+                // 启动通用试炼线程
+                TrialThreadParam* param = new TrialThreadParam{g_trialCheckCode, type};
+                HANDLE hThread = CreateThread(nullptr, 0, TrialThreadProc, param, 0, nullptr);
+                if (hThread) CloseHandle(hThread);
+            }
+            break;
+            
+        case 5:   // 火焰试炼结束
+        case 25:  // 火风试炼结束
+            if (result == 0 && offset + 4 <= packet.body.size()) {
+                int32_t flame = ReadInt32LE(body, offset);
+                char msg[64];
+                sprintf_s(msg, "试炼完成，获得 %d 印记", flame);
+            }
+            break;
+            
+        case 15:  // 风暴试炼结束
+            if (result == 0 && offset + 4 <= packet.body.size()) {
+                int32_t value = ReadInt32LE(body, offset);
+            }
+            break;
+            
+        case 1:   // 火焰试炼基础信息
+        case 21:  // 火风试炼基础信息
+        case 11:  // 风暴试炼基础信息
+            if (offset + 12 <= packet.body.size()) {
+                g_trialGameCount = ReadInt32LE(body, offset);
+                g_trialCoolTime = ReadInt32LE(body, offset);
+                g_trialAwardNum = ReadInt32LE(body, offset);
+            }
+            break;
+    }
+}
+
+// ============ 通用试炼线程实现 ============
+
+DWORD WINAPI TrialThreadProc(LPVOID lpParam) {
+    TrialThreadParam* param = static_cast<TrialThreadParam*>(lpParam);
+    int checkCode = param->checkCode;
+    const TrialConfig& config = GetTrialConfig(param->type);
+    
+    // 延时300ms（模拟游戏时间）
+    Sleep(300);
+    
+    // 发送结束游戏封包: [endOp, -1, award, checkCode]
+    SendEndTrialPacket(param->type, -1, config.award, checkCode);
+    
+    // 标记试炼完成
+    g_trialComplete = true;
+    
+    // 释放参数内存
+    delete param;
+    
+    return 0;
+}
+
+// ============ 玄塔寻宝功能实现 ============
+
+// 存入妖怪仓库
+// Opcode: 1187333, Params: 1, Body: [param1, param2]
+BOOL SendPutToSpiritStorePacket(int param1, int param2) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1187333)
+        .SetParams(1)
+        .WriteInt32(param1)
+        .WriteInt32(param2)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 法宝操作（贝贝）
+// Opcode: 1186832, Params: type (0=召唤, 2=收回), Body: [userId, 0]
+BOOL SendFabaoPacket(int type, uint32_t userId) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1186832)
+        .SetParams(static_cast<uint32_t>(type))
+        .WriteUInt32(userId)
+        .WriteInt32(0)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 查询玄塔信息
+// Opcode: 1184833, Params: 341, Body: [1] (CHECK_INFO)
+BOOL SendTowerCheckInfoPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(341)
+        .WriteInt32(1)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 购买骰子（18个）
+// Opcode: 1184833, Params: 341, Body: [6, 18] (BUY_BONES, 数量18)
+BOOL SendBuyDicePacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(341)
+        .WriteInt32(6)
+        .WriteInt32(18)
+        .Build();
+    BOOL result = SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    if (result) {
+        UIBridge::Instance().UpdateHelperText(L"已购买18个骰子");
+    }
+    return result;
+}
+
+// 购买骰子（5个）
+// Opcode: 1184833, Params: 341, Body: [6, 5] (BUY_BONES, 数量5)
+BOOL SendBuyDice5Packet() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(341)
+        .WriteInt32(6)
+        .WriteInt32(5)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 跳转到玄塔地图
+// Opcode: 1184313, Params: 16006
+BOOL SendEnterTowerMapPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184313)
+        .SetParams(16006)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 投掷骰子
+// Opcode: 1184833, Params: 341, Body: [2] (THROW_BONES)
+BOOL SendThrowBonesPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(341)
+        .WriteInt32(2)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 退出世界（回家第一步）
+// Opcode: 1184002, Params: userId
+BOOL SendExitScenePacket(uint32_t userId) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184002)
+        .SetParams(userId)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 查询玄塔结果
+// Opcode: 1184833, Params: 341, Body: [4] (REACH_RESULT)
+BOOL SendTowerResultPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184833)
+        .SetParams(341)
+        .WriteInt32(4)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 重新进入玄塔地图（回家第二步）
+// Opcode: 1184313, Params: 1002
+BOOL SendReenterTowerMapPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184313)
+        .SetParams(1002)
+        .Build();
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 玄塔自动跑塔线程
+// 流程：循环投掷20次（带响应等待）→ 退出回家
+DWORD WINAPI TowerAutoThreadProc(LPVOID lpParam) {
+    std::wstring* pStatus = reinterpret_cast<std::wstring*>(lpParam);
+    bool success = true;
+    int successCount = 0;
+
+    // 辅助函数：更新状态到UI
+    auto updateStatus = [&](const std::wstring& status) {
+        *pStatus = status;
+        UIBridge::Instance().UpdateHelperText(status);
+    };
+
+    // 辅助函数：投掷单次骰子并等待响应
+    // 返回值：true=成功, false=失败
+    auto throwOnceAndWait = [&]() -> bool {
+        // 重置投掷响应标志
+        {
+            CriticalSectionLock lock(g_towerCS);
+            g_towerThrowResponseReceived = false;
+            g_towerLastThrowSuccess = false;
+        }
+
+        // 发送投掷骰子封包
+        if (!SendThrowBonesPacket()) {
+            return false;
+        }
+
+        // 等待 THROW_BONES 响应（最多3秒）
+        int waitCount = 0;
+        bool received = false;
+        bool throwSuccess = false;
+        
+        while (waitCount < 30) {
+            {
+                CriticalSectionLock lock(g_towerCS);
+                received = g_towerThrowResponseReceived;
+                if (received) {
+                    throwSuccess = g_towerLastThrowSuccess;
+                }
+            }
+            if (received) break;
+            Sleep(100);
+            waitCount++;
+        }
+
+        return received && throwSuccess;
+    };
+
+    // 初始化状态
+    {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerDiceCount = 0;
+        g_towerRemainingDice = 0;
+        g_towerThrowResponseReceived = false;
+        g_towerLastThrowSuccess = false;
+        g_towerCheckInfoReceived = false;
+        g_towerBuyBonesReceived = false;
+        g_towerBuyBonesSuccess = false;
+        g_towerBuyBonesNum = 0;
+        g_towerPassFlag = 0;           // 重置通关标志
+        g_towerIsCompleted = false;    // 重置完成标志
+    }
+
+    // ==================== 一键跑塔流程开始 ====================
+    
+    // 步骤1: 循环投掷骰子直到耗尽
+    updateStatus(L"开始投掷骰子...");
+    int totalAttempts = 0;
+    int maxTotalAttempts = 100;  // 防止无限循环的安全限制
+    
+    while (totalAttempts < maxTotalAttempts) {
+        // 1. 查询玄塔信息，获取当前骰子数量
+        {
+            CriticalSectionLock lock(g_towerCS);
+            g_towerCheckInfoReceived = false;
+        }
+        SendTowerCheckInfoPacket();
+        
+        // 等待 CHECK_INFO 响应（最多3秒）
+        int waitCount = 0;
+        bool checkReceived = false;
+        while (waitCount < 30) {
+            {
+                CriticalSectionLock lock(g_towerCS);
+                checkReceived = g_towerCheckInfoReceived;
+            }
+            if (checkReceived) break;
+            Sleep(100);
+            waitCount++;
+        }
+        
+        if (!checkReceived) {
+            updateStatus(L"错误：查询骰子数量超时");
+            success = false;
+            goto cleanup;
+        }
+        
+        // 2. 获取当前骰子数量和通关状态
+        int currentDice = 0;
+        int passFlag = 0;
+        bool isCompleted = false;
+        {
+            CriticalSectionLock lock(g_towerCS);
+            currentDice = g_towerRemainingDice;
+            passFlag = g_towerPassFlag;
+            isCompleted = g_towerIsCompleted;
+        }
+        
+        // 3. 检查是否已通关（passflag==1 或之前已标记完成）
+        if (passFlag == 1 || isCompleted) {
+            updateStatus(L"玄塔已通关，停止投掷");
+            break;
+        }
+        
+        // 4. 如果骰子数量为0，退出循环
+        if (currentDice <= 0) {
+            updateStatus(L"骰子已耗尽，停止投掷");
+            break;
+        }
+        
+        // 4. 投掷一次骰子
+        totalAttempts++;
+        updateStatus(L"投掷骰子（剩余 " + std::to_wstring(currentDice) + L" 个）...");
+        
+        // 发送 THROW_BONES 并等待响应
+        if (throwOnceAndWait()) {
+            successCount++;
+        }
+        Sleep(50);
+        
+        // 检查是否通关（nodetype == 8）
+        {
+            CriticalSectionLock lock(g_towerCS);
+            if (g_towerIsCompleted || g_towerLastThrowNodeType == 8) {
+                updateStatus(L"已到达玄塔终点，通关！");
+                // 发送 REACH_RESULT 后退出
+                SendTowerResultPacket();
+                Sleep(100);
+                break;
+            }
+        }
+        
+        // 发送 REACH_RESULT
+        SendTowerResultPacket();
+        Sleep(100);
+    }
+    
+    if (totalAttempts >= maxTotalAttempts) {
+        updateStatus(L"警告：达到最大投掷次数限制（100次）");
+    }
+    
+    updateStatus(L"投掷完成，成功 " + std::to_wstring(successCount) + L" 次");
+
+    // 步骤2和3: 自动回家（如果勾选）
+    if (g_autoGoHome.load()) {
+        Sleep(200);
+
+        // 步骤2: 退出场景回家
+        updateStatus(L"步骤2: 退出场景回家...");
+        if (!SendExitScenePacket(g_userId)) {
+            updateStatus(L"错误：退出场景失败！");
+            success = false;
+            goto cleanup;
+        }
+        Sleep(800);
+
+        // 步骤3: 重新进入玄塔地图（刷新活动状态）
+        updateStatus(L"步骤3: 重新进入玄塔地图...");
+        if (!SendReenterTowerMapPacket()) {
+            updateStatus(L"错误：重新进入地图失败！");
+            success = false;
+            goto cleanup;
+        }
+        Sleep(800);
+    }
+
+cleanup:
+    // 重置状态标志变量
+    {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerMapEntered = false;
+        g_towerBattleStarted = false;
+        g_towerResultReceived = false;
+        g_towerThrowResponseReceived = false;
+        g_towerCheckInfoReceived = false;
+        g_towerBuyBonesReceived = false;
+        g_towerAutoMode = false;
+        g_towerPassFlag = 0;           // 重置通关标志
+        g_towerIsCompleted = false;    // 重置完成标志
+    }
+
+    // 根据成功/失败状态更新 UI
+    if (success) {
+        updateStatus(L"✓ 一键玄塔完成！成功投掷 " + std::to_wstring(successCount) + L" 次");
+    } else {
+        updateStatus(L"✗ 一键玄塔失败，请查看日志");
+    }
+
+    return 0;
+}
+
+// 一键玄塔完整流程
+BOOL SendOneKeyTowerPacket() {
+    bool autoMode = false;
+    {
+        CriticalSectionLock lock(g_towerCS);
+        autoMode = g_towerAutoMode;
+    }
+
+    if (autoMode) {
+        UIBridge::Instance().UpdateHelperText(L"一键玄塔已在运行中，请勿重复点击");
+        return FALSE;  // 已经在运行
+    }
+
+    if (g_userId == 0) {
+        UIBridge::Instance().UpdateHelperText(L"错误：请先进入游戏获取卡布号");
+        return FALSE;
+    }
+
+    // 初始化状态
+    {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerAutoMode = true;
+        g_towerMapEntered = false;
+        g_towerBattleStarted = false;
+        g_towerResultReceived = false;
+        g_towerDiceCount = 0;
+        g_towerRemainingDice = 0;
+        g_towerThrowResponseReceived = false;
+        g_towerLastThrowSuccess = false;
+        g_towerCheckInfoReceived = false;
+        g_towerBuyBonesReceived = false;
+        g_towerBuyBonesSuccess = false;
+        g_towerBuyBonesNum = 0;
+        g_towerPassFlag = 0;           // 重置通关标志
+        g_towerIsCompleted = false;    // 重置完成标志
+    }
+
+    std::wstring* pStatus = new(std::nothrow) std::wstring(L"一键玄塔初始化...");
+    if (!pStatus) {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerAutoMode = false;
+        return FALSE;
+    }
+
+    // 启动玄塔线程
+    HANDLE hThread = CreateThread(nullptr, 0, TowerAutoThreadProc, pStatus, 0, nullptr);
+    if (hThread) {
+        CloseHandle(hThread);
+        return TRUE;
+    }
+
+    delete pStatus;
+    {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerAutoMode = false;
+    }
+    return FALSE;
+}
+
+// 处理玄塔活动响应（在HookedRecv中调用）
+void ProcessTowerActivityResponse(const GamePacket& packet) {
+    // 处理地图进入响应（Opcode 1315395 = ENTER_SCENE_BACK）
+    if (packet.opcode == Opcode::ENTER_SCENE_BACK) {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerMapEntered = true;
+    }
+
+    // 处理战斗开始响应（Opcode 1317120 = BATTLE_START）
+    if (packet.opcode == Opcode::BATTLE_START) {
+        CriticalSectionLock lock(g_towerCS);
+        g_towerBattleStarted = true;
+    }
+
+    // 处理玄塔活动响应（支持两个 Opcode：1185569 和 1324097 (TRIAL_BACK), Params = 341）
+    if ((packet.opcode == 1185569 || packet.opcode == Opcode::TRIAL_BACK) && packet.params == 341) {
+        if (packet.body.size() >= 4) {
+            size_t offset = 0;
+            int32_t operation = ReadInt32LE(packet.body.data(), offset);
+
+            // CHECK_INFO 响应 (operation = 1)：查询玄塔信息
+            // AS3 代码: mbody.nbones = body.readInt(); mbody.sbones = body.readInt(); ...
+            // Body 结构：[operation:4][nbones:4][sbones:4][passflag:4][getMonsterTime:4][nowpos:4][buycount:4][noTip:4][nodeList:90*4]
+            // 总大小：4 + 7*4 + 90*4 = 392 字节
+            if (operation == 1 && packet.body.size() >= 392) {
+                int32_t nbones = ReadInt32LE(packet.body.data(), offset);  // 普通骰子数量
+                int32_t sbones = ReadInt32LE(packet.body.data(), offset);  // 特殊骰子数量
+                int32_t passflag = ReadInt32LE(packet.body.data(), offset); // 通关标志（0=未通关，1=已通关）
+                // 其余字段: getMonsterTime, nowpos, buycount, noTip, nodeList[90]
+
+                CriticalSectionLock lock(g_towerCS);
+                // 更新骰子数量（上限20）
+                if (nbones > 20) nbones = 20;
+                if (sbones > 20) sbones = 20;
+                g_towerDiceCount = nbones;
+                g_towerRemainingDice = nbones;
+                g_towerCheckInfoNbones = nbones;
+                g_towerPassFlag = passflag;  // 存储通关标志
+                g_towerCheckInfoReceived = true;
+            }
+            // REACH_RESULT 响应 (operation = 4)：查询结果
+            else if (operation == 4) {
+                CriticalSectionLock lock(g_towerCS);
+                g_towerResultReceived = true;
+            }
+            // UPDATE_BONES_NUM 响应 (operation = 9)：服务器通知更新骰子数量
+            // AS3 代码: mbody.nbones = body.readInt(); mbody.sbones = body.readInt();
+            // Body 结构：[operation:4][nbones:4][sbones:4]
+            else if (operation == 9 && packet.body.size() >= 12) {
+                int32_t nbones = ReadInt32LE(packet.body.data(), offset);
+                int32_t sbones = ReadInt32LE(packet.body.data(), offset);
+
+                CriticalSectionLock lock(g_towerCS);
+                if (nbones > 20) nbones = 20;
+                if (sbones > 20) sbones = 20;
+                g_towerDiceCount = nbones;
+                g_towerRemainingDice = nbones;
+            }
+            // BUY_BONES 响应 (operation = 6)：购买骰子结果
+            // AS3 代码: mbody.result = body.readInt(); mbody.num = body.readInt(); mbody.buycount = body.readInt();
+            // Body 结构：[operation:4][result:4][num:4][buycount:4]
+            // 总大小：4 + 3*4 = 16 字节
+            // result: 0=成功, -1=金币不足, -3=已达上限
+            // num: 购买后的骰子数量
+            // buycount: 今日购买次数
+            else if (operation == 6 && packet.body.size() >= 16) {
+                int32_t result = ReadInt32LE(packet.body.data(), offset);    // 结果 (0=成功)
+                int32_t num = ReadInt32LE(packet.body.data(), offset);       // 骰子数量
+                int32_t buycount = ReadInt32LE(packet.body.data(), offset);  // 购买次数
+
+                CriticalSectionLock lock(g_towerCS);
+                g_towerBuyBonesSuccess = (result == 0);
+                g_towerBuyBonesNum = num;
+                g_towerBuyBonesReceived = true;
+                
+                // 购买成功时更新骰子数量
+                if (result == 0) {
+                    if (num > 20) num = 20;
+                    g_towerDiceCount = num;
+                    g_towerRemainingDice = num;
+                }
+            }
+            // THROW_BONES 响应 (operation = 2)：投掷骰子结果
+            // AS3 代码: mbody.result = body.readInt(); mbody.step = body.readInt(); mbody.nodetype = body.readInt(); ...
+            // Body 结构：[operation:4][result:4][step:4][nodetype:4][param1:4][param2:4][param3:4]
+            // 总大小：4 + 6*4 = 28 字节
+            // result: 0=成功, -1=失败
+            // step: 投掷步数
+            // nodetype: 节点类型 (8=通关终点)
+            // param3: 随机骰子点数
+            else if (operation == 2 && packet.body.size() >= 28) {
+                int32_t result = ReadInt32LE(packet.body.data(), offset);    // 结果 (0=成功, -1=失败)
+                int32_t step = ReadInt32LE(packet.body.data(), offset);      // 步数
+                int32_t nodetype = ReadInt32LE(packet.body.data(), offset);  // 节点类型
+                int32_t param1 = ReadInt32LE(packet.body.data(), offset);
+                int32_t param2 = ReadInt32LE(packet.body.data(), offset);
+                int32_t param3 = ReadInt32LE(packet.body.data(), offset);    // 随机骰子点数
+
+                CriticalSectionLock lock(g_towerCS);
+                // 记录投掷结果
+                g_towerLastThrowSuccess = (result == 0);
+                g_towerLastThrowStep = step;
+                g_towerLastThrowNodeType = nodetype;
+                g_towerThrowResponseReceived = true;
+                
+                // 检测是否通关（nodetype == 8 表示到达终点）
+                if (nodetype == 8) {
+                    g_towerIsCompleted = true;
+                }
+                
+                // 投掷成功时减少剩余骰子数
+                if (result == 0 && g_towerRemainingDice > 0) {
+                    g_towerRemainingDice--;
+                }
+                g_towerResultReceived = true;
+            }
+        }
+    }
+}
+
+// ============ 跳舞大赛功能实现 ============
+
+// 进入地图（用于跳舞大赛）
+// 封包格式: 44 53 00 00 39 12 12 00 [mapId:4字节] (12字节)
+// Opcode: 1184313 (0x121239) 小端序 = 39 12 12 00
+// Params: mapId 小端序写入
+// 响应 Opcode: 1315395 = OP_CLIENT_REQ_ENTER_SCENE.back
+BOOL SendEnterScenePacket(int mapId) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1184313)
+        .SetParams(static_cast<uint32_t>(mapId))
+        .Build();
+
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// ============ 跳舞大赛封包发送函数 ============
+
+// 跳舞大赛 - 发送跳舞活动操作封包
+// Opcode: 1187375 (0x121E2F)
+// 小端序字节: 2F 1E 12 00
+// params=3: 开始游戏, Body=[difficulty]
+// params=4: 游戏过程, Body=[serverTime, processid, count, ...states]
+// params=5: 结束游戏, Body=null
+// params=6: 提交分数, Body=[7, serverScore]
+BOOL SendDanceActivityPacketEx(int params, const std::vector<int32_t>& bodyValues) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1187375)
+        .SetParams(static_cast<uint32_t>(params))
+        .WriteInt32Array(bodyValues)
+        .Build();
+
+    // 如果是开始游戏（params=3），不等待响应（让调用者处理等待）
+    uint32_t expectedOpcode = 0;
+    DWORD timeoutMs = 0;
+
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), expectedOpcode, timeoutMs);
+}
+
+// 跳舞大赛 - 发送阶段封包（进入/退出活动）
+// Opcode: 1187368 (0x121E28)
+// 小端序字节: 28 1E 12 00
+// params=1: 进入活动, Body=[2]
+// params=2: 退出活动, Body=[0xFFFFFFFF, userId]
+BOOL SendDanceStagePacketEx(int params, const std::vector<int32_t>& bodyValues) {
+    auto packet = PacketBuilder()
+        .SetOpcode(1187368)
+        .SetParams(static_cast<uint32_t>(params))
+        .WriteInt32Array(bodyValues)
+        .Build();
+    
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+// 跳舞大赛 - 进入活动（发送进入封包）
+// 封包: 44 53 04 00 28 1E 12 00 01 00 00 00 02 00 00 00
+// Opcode: 1184808, Params=1, Body=[2]
+BOOL SendDanceEnterPacket() {
+    return SendDanceStagePacketEx(1, {2});
+}
+
+// 跳舞大赛 - 开始游戏
+BOOL SendDanceStartPacket() {
+    g_danceState.waitingResponse = true;
+    g_danceState.gameState = 0;
+    g_danceState.counter = 5;
+    return SendDanceActivityPacketEx(3, {g_danceState.serverDifficulty});
+}
+
+// 跳舞大赛 - 游戏过程封包（参考易语言代码）
+// 封包格式: 44 53 20 00 2F 1E 12 00 04 00 00 00 [时间戳][跳舞计数] 05 00 00 00 02 00 00 00 02 00 00 00 00 00 00 00 00 00 00 00 02 00 00 00 02 00 00 00
+// Body: [serverTime, danceCounter, 5, 2, 2, 0, 0, 2, 2]
+// state=2 表示 Great (150分)
+BOOL SendDanceProcessPacketEx(int serverTime, int danceCounter) {
+    std::vector<int32_t> body;
+    body.push_back(serverTime);        // serverTime (使用当前时间戳)
+    body.push_back(danceCounter);      // 跳舞计数
+    body.push_back(5);                 // count = 5
+    body.push_back(2);                 // state1 = Great
+    body.push_back(2);                 // state2 = Great
+    body.push_back(0);                 // state3
+    body.push_back(0);                 // state4
+    body.push_back(2);                 // state5 = Great
+    body.push_back(2);                 // state6 = Great
+
+    return SendDanceActivityPacketEx(4, body);
+}
+
+// 跳舞大赛 - 结束游戏
+// 封包: 44 53 00 00 2F 1E 12 00 05 00 00 00
+// Opcode: 1185839, Params=5
+BOOL SendDanceEndPacketEx() {
+    return SendDanceActivityPacketEx(5, {});
+}
+
+// 跳舞大赛 - 退出活动
+// 封包: 44 53 08 00 28 1E 12 00 02 00 00 00 FF FF FF FF [userId]
+// Opcode: 1184808, Params=2, Body=[0xFFFFFFFF, userId]
+BOOL SendDanceExitPacketEx() {
+    return SendDanceStagePacketEx(2, {static_cast<int32_t>(0xFFFFFFFF), static_cast<int32_t>(g_userId)});
+}
+
+// 跳舞大赛 - 提交分数
+// 封包: 44 53 08 00 2F 1E 12 00 06 00 00 00 07 00 00 00 [serverScore]
+// Opcode: 1185839, Params=6, Body=[7, serverScore]
+BOOL SendDanceSubmitScorePacket(int serverScore) {
+    return SendDanceActivityPacketEx(6, {7, serverScore});
+}
+
+
+
+// 处理跳舞大赛活动响应
+void ProcessDanceActivityResponse(const GamePacket& packet) {
+    if (packet.body.size() < 4) {
+        LogDance("ProcessDanceActivityResponse: body size < 4, skipping");
+        return;
+    }
+    
+    uint32_t state = packet.params;
+    const BYTE* body = packet.body.data();
+    size_t length = packet.body.size();
+    size_t offset = 0;
+    
+    LogDance("ProcessDanceActivityResponse: state=%u, length=%zu", state, length);
+    
+    int32_t gameState = ReadInt32LE(body, offset);
+    LogDance("ProcessDanceActivityResponse: Response gameState = %d", gameState);
+    
+    if (gameState == 0 || gameState == 2 || gameState == 6) {
+        LogDance("ProcessDanceActivityResponse: gameState in valid range, processing");
+        switch (state) {
+            case 3:  // 开始游戏响应
+                LogDance("ProcessDanceActivityResponse: state == 3 (start game)");
+                if (offset + 16 <= length) {
+                    g_danceState.serverDifficulty = ReadInt32LE(body, offset);
+                    g_danceState.serverTime = ReadInt32LE(body, offset);
+                    g_danceState.processId = ReadInt32LE(body, offset);
+                    g_danceState.clothNum = ReadInt32LE(body, offset);
+                    
+                    g_danceState.gameState = 2;
+                    g_danceState.waitingResponse = false;
+                    LogDance("ProcessDanceActivityResponse: Set gameState = 2 (game started)");
+                } else {
+                    LogDance("ProcessDanceActivityResponse: offset + 16 > length, cannot read game start data");
+                }
+                break;
+                
+            case 4:  // 游戏过程响应
+                if (offset + 16 <= length) {
+                    offset += 4;  // serverTime
+                    int32_t respProcessId = ReadInt32LE(body, offset);
+                    offset += 8;  // processId, serverCombo
+                    g_danceState.serverScore = ReadInt32LE(body, offset);
+                    
+                    if (respProcessId >= g_danceState.processId) {
+                        g_danceState.processId = respProcessId;
+                    }
+                    g_danceState.waitingResponse = false;
+                }
+                break;
+                
+            case 5:  // 结束游戏响应
+                // AS3: serverTime, processid, serverCombo, serverScore, serverExp, todayRewardExpCnt, todayRewardExp, drawRewardCnt
+                if (offset + 32 <= length) {
+                    offset += 12;  // serverTime(4), processid(4), serverCombo(4)
+                    g_danceState.serverScore = ReadInt32LE(body, offset);
+                    offset += 8;  // serverScore(4), serverExp(4)
+                    g_danceState.todayRewardCnt = ReadInt32LE(body, offset);
+                    offset += 8;  // todayRewardExpCnt(4), todayRewardExp(4)
+                    g_danceState.drawRewardCnt = ReadInt32LE(body, offset);
+                    
+                    g_danceState.remainCnt = WpeHook::DANCE_MAX_DAILY_COUNT - g_danceState.todayRewardCnt;
+                    if (g_danceState.remainCnt < 0) g_danceState.remainCnt = 0;
+                    
+                    if (g_ExecuteScriptFunc) {
+                        wchar_t script[256];
+                        swprintf(script, 256, 
+                            L"if(window.updateDanceCount) window.updateDanceCount(%d);",
+                            g_danceState.todayRewardCnt);
+                        g_ExecuteScriptFunc(script);
+                    }
+                }
+                g_danceState.gameState = 0;
+                g_danceState.waitingResponse = false;
+                break;
+        }
+    }
+    else if (gameState == 5 || gameState == 3) {
+        g_danceState.gameState = 0;
+        g_danceState.waitingResponse = false;
+    }
+}
+
+// 处理跳舞大赛阶段响应 (opcode 1318440)
+void ProcessDanceStageResponse(const GamePacket& packet) {
+    // 读取 params (mParams)
+    uint32_t params = packet.params;
+    
+    // params == 777 时直接返回
+    if (params == 777) return;
+    
+    // 根据params处理不同阶段
+    // params == 0: 初始列表
+    // params == 1: 选择物品
+    // params == 2: 确认
+}
+
+// 跳舞大赛线程函数声明
+DWORD WINAPI DanceContestThreadProc(LPVOID lpParam);
+
+// 跳舞大赛单次执行（内部函数）
+static BOOL SendDanceContestOnce() {
+    // 初始化跳舞计数和状态
+    g_danceState.counter = 5;
+    g_danceState.gameState = 0;
+    g_danceState.waitingResponse = false;
+    g_danceState.enteredMap = false;
+
+    // 1. 循环发送进入地图封包（最多10次）
+    int enterCount = 0;
+    while (!g_danceState.enteredMap && enterCount < 10) {
+        if (SendEnterScenePacket(1028)) {
+            // 成功发送并等待响应
+            if (g_danceState.enteredMap) {
+                break;  // 已进入地图
+            }
+            Sleep(800);
+        }
+        // 失败或未进入地图，继续重试
+        enterCount++;
+    }
+
+    if (!g_danceState.enteredMap) {
+        return FALSE;
+    }
+
+    Sleep(300);
+
+    // 2. 发送进入活动封包
+    SendDanceEnterPacket();
+    Sleep(300);
+
+    // 3. 发送开始游戏封包（不等待响应）
+    g_danceState.waitingResponse = true;
+    g_danceState.gameState = 0;  // 确保状态重置
+    if (!SendDanceStartPacket()) {
+        // 发送封包失败
+        g_danceState.waitingResponse = false;
+        return FALSE;
+    }
+
+    // 4. 等待gameState被设置为2（游戏中），最多等待15秒
+    for (int i = 0; i < 150 && g_danceState.gameState != 2; i++) {
+        Sleep(100);
+    }
+    
+    // 5. 如果状态变为2（游戏中），启动跳舞线程并等待完成
+    if (g_danceState.gameState == 2) {
+        HANDLE hThread = CreateThread(NULL, 0, DanceContestThreadProc, NULL, 0, NULL);
+        if (hThread) {
+            WaitForSingleObject(hThread, 30000);
+            CloseHandle(hThread);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+// 跳舞大赛主流程（自动执行3次）
+BOOL SendDanceContestPacket() {
+    // 客户端自己计数，固定执行3次，每次点击从0开始
+    int completedCount = 0;
+    
+    // 辅助函数：通过 UIBridge 更新UI计数
+    auto updateDanceCountUI = [](int count) {
+        std::wstring jsCode = L"if(window.updateDanceCount) window.updateDanceCount(" 
+            + std::to_wstring(count) + L");";
+        UIBridge::Instance().ExecuteJS(jsCode);
+    };
+    
+    // 初始化UI显示为0
+    updateDanceCountUI(0);
+
+    // 循环执行3次
+    for (int i = 0; i < WpeHook::DANCE_MAX_DAILY_COUNT; i++) {
+        if (SendDanceContestOnce()) {
+            completedCount++;
+            
+            // 每次完成后更新UI计数
+            updateDanceCountUI(completedCount);
+            
+            // 等待一小段时间确保UI更新
+            Sleep(300);
+        } else {
+            break;
+        }
+    }
+    
+    // 最终确保UI显示正确
+    updateDanceCountUI(completedCount);
+    
+    return completedCount > 0;
+}
+// 跳舞大赛线程函数
+DWORD WINAPI DanceContestThreadProc(LPVOID lpParam) {
+    // 跳舞计数从5开始，每次+5，直到超过100
+    while (g_danceState.counter <= 100) {
+        Sleep(220);
+        
+        int serverTime = static_cast<int>(time(nullptr));
+        SendDanceProcessPacketEx(serverTime, g_danceState.counter);
+        
+        g_danceState.counter += 5;
+    }
+    
+    Sleep(220);
+    
+    // 发送结束封包两次
+    SendDanceEndPacketEx();
+    Sleep(220);
+    SendDanceEndPacketEx();
+    Sleep(220);
+    
+    // 发送退出封包两次
+    SendDanceExitPacketEx();
+    Sleep(220);
+    SendDanceExitPacketEx();
+    Sleep(220);
+    
+    // 发送提交分数封包
+    SendDanceSubmitScorePacket(g_danceState.serverScore);
+    
+    Sleep(500);
+    
+    if (g_ExecuteScriptFunc) {
+        g_ExecuteScriptFunc(L"if(window.onDanceComplete) window.onDanceComplete();");
+    }
+    
+    // 重置状态，为下一次执行做准备
+    g_danceState.gameState = 0;
+    g_danceState.waitingResponse = false;
+    return 0;
+}
+
+// 日常活动任务数据结构
+struct DailyTaskData {
+    DWORD flags;
+    HWND hwnd;
+};
+
+// 一键完成日常活动的线程函数
+DWORD WINAPI DailyTaskThreadProc(LPVOID lpParam) {
+    DailyTaskData* taskData = static_cast<DailyTaskData*>(lpParam);
+    DWORD flags = taskData->flags;
+    
+    int completedCount = 0;
+    int totalCount = 0;
+    
+    // 计算总数（支持12个活动）
+    for (int i = 0; i < 12; i++) {
+        if (flags & (1 << i)) totalCount++;
+    }
+    
+    // 按顺序执行
+    if (flags & 0x01) {  // 深度挖宝
+        g_deepDigState.autoMode = true;
+        g_deepDigState.completedCount = 0;
+        SendQueryDeepDigCountPacket();
+        
+        // 执行剩余次数
+        int execCount = g_deepDigState.remainingCount > 0 ?
+                        g_deepDigState.remainingCount : WpeHook::DEEP_DIG_DEFAULT_COUNT;
+        for (int i = 0; i < execCount; i++) {
+            g_deepDigState.waitingResponse = true;
+            g_deepDigState.sessionId = 0;
+
+            // 发送开始游戏封包
+            BYTE startPacket[36] = {
+                0x44, 0x53, 0x18, 0x00,
+                0x15, 0x14, 0x12, 0x00,
+                0x0C, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00
+            };
+            SendPacket(0, startPacket, sizeof(startPacket), Opcode::DEEP_DIG_BACK, 5000);
+            
+            Sleep(500);
+            
+            // 发送结束游戏封包
+            if (g_deepDigState.sessionId > 0) {
+                BYTE endPacket[36] = {
+                    0x44, 0x53, 0x18, 0x00,
+                    0x15, 0x14, 0x12, 0x00,
+                    0x0C, 0x00, 0x00, 0x00,
+                    0x04, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x04, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00
+                };
+                endPacket[24] = static_cast<BYTE>(g_deepDigState.sessionId & 0xFF);
+                endPacket[25] = static_cast<BYTE>((g_deepDigState.sessionId >> 8) & 0xFF);
+                endPacket[26] = static_cast<BYTE>((g_deepDigState.sessionId >> 16) & 0xFF);
+                endPacket[27] = static_cast<BYTE>((g_deepDigState.sessionId >> 24) & 0xFF);
+                SendPacket(0, endPacket, sizeof(endPacket));
+            }
+            
+            Sleep(800);
+        }
+        
+        g_deepDigState.autoMode = false;
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x02) {  // 每日卡牌
+        SendDailyCardPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x04) {  // 每日礼包
+        SendDailyGiftPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x08) {  // 每周礼包
+        SendWeeklyGiftPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x10) {  // 家族考勤
+        SendFamilyCheckinPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x20) {  // 家族报道
+        SendFamilyReportPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x40) {  // 家族保卫
+        SendFamilyDefendPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x80) {  // 商城惊喜
+        SendShopSurprisePacket();
+        completedCount++;
+    }
+    if (flags & 0x100) {  // 跳舞大赛
+        SendDanceContestPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x200) {  // 火风试炼
+        SendFireWindTrialPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x400) {  // 火焰试炼
+        SendFireTrialPacket();
+        completedCount++;
+        Sleep(300);
+    }
+    if (flags & 0x800) {  // 风暴试炼
+        SendStormTrialPacket();
+        completedCount++;
+    }
+    
+    // 发送完成消息
+    if (g_hWnd) {
+        PostMessage(g_hWnd, WM_DAILY_TASK_COMPLETE, completedCount, totalCount);
+    }
+    
+    delete taskData;
+    return 0;
+}
+
+// ============================================================================
+// 封包标签化功能
+// ============================================================================
+
+/**
+ * @brief Opcode 到标签的映射
+ */
+static std::map<uint32_t, std::string> g_PacketLabels = {
+    // ========== 战斗相关 ==========
+    {1186049, "战斗准备"},
+    {1317120, "战斗开始"},
+    {1317121, "战斗回合开始"},
+    {1317122, "战斗回合结算"},
+    {1317123, "战斗Buff移除"},
+    {1317124, "战斗Buff"},
+    {1317126, "切换妖怪回合"},
+    {1317127, "战斗经验"},
+    {1317130, "战斗新经验"},
+    {1317131, "战斗Buff列表"},
+    {1317154, "战斗技能"},
+    {1317216, "妖怪升级"},
+    {1317256, "战斗奖励"},
+    {1186056, "战斗结束请求"},
+    {1186232, "组队战斗查看"},
+    {1186233, "查看战斗准备"},
+    {1186113, "退出大型战斗"},
+    {1316469, "玩家战斗"},
+
+    // ========== 地图相关 ==========
+    {1184313, "进入场景"},
+    {1315395, "进入场景响应"},
+    {1184519, "切换线路"},
+    {1315591, "切换线路响应"},
+    {1184317, "场景玩家列表"},
+    {1315086, "场景玩家列表响应"},
+    {1315075, "添加玩家到场景"},
+    {1315328, "从场景移除玩家"},
+    {1315124, "玩家替换"},
+    {1183750, "进入世界"},
+    {1314822, "进入世界响应"},
+    {1184029, "退出世界"},
+    {1315101, "退出世界响应"},
+
+    // ========== 贝贝回血 ==========
+    {1186818, "贝贝回血"},
+
+    // ========== 妖怪相关 ==========
+    {1185809, "灵玉查询"},
+    {1316881, "灵玉列表"},
+    {1185814, "分解灵玉"},
+    {1316886, "分解响应"},
+    {1185819, "批量分解"},
+    {1316891, "批量分解响应"},
+    {1318401, "妖怪背包"},
+
+    // ========== 聊天相关 ==========
+    {1315083, "聊天消息"},
+    {1316376, "家族聊天"},
+};
+
+std::string GetPacketLabel(uint32_t opcode, bool bSend) {
+    // 只对发送包或特定响应包显示标签
+    auto it = g_PacketLabels.find(opcode);
+    if (it != g_PacketLabels.end()) {
+        return it->second;
+    }
+    return "";
+}
+
+// ============================================================================
+// 劫持功能实现
+// ============================================================================
+
+BOOL AddHijackRule(HijackType type, bool forSend, bool forRecv, 
+                   const std::string& searchHex, const std::string& replaceHex) {
+    if (type == HIJACK_NONE || searchHex.empty()) {
+        return FALSE;
+    }
+    
+    HijackRule rule;
+    rule.type = type;
+    rule.forSend = forSend;
+    rule.forRecv = forRecv;
+    rule.searchHex = searchHex;
+    rule.replaceHex = replaceHex;
+    
+    CriticalSectionLock lock(g_hijackRulesCS.Get());
+    g_HijackRules.push_back(rule);
+    
+    return TRUE;
+}
+
+VOID ClearHijackRules() {
+    CriticalSectionLock lock(g_hijackRulesCS.Get());
+    g_HijackRules.clear();
+}
+
+VOID SetHijackEnabled(bool enable) {
+    g_bHijackEnabled = enable;
+}
+
+bool ProcessHijack(bool bSend, const BYTE* pData, DWORD* pdwSize, std::vector<BYTE>* pModifiedData) {
+    if (!g_bHijackEnabled || !pData || !pdwSize) {
+        return false;
+    }
+    
+    CriticalSectionLock lock(g_hijackRulesCS.Get());
+    
+    for (const auto& rule : g_HijackRules) {
+        // 检查规则是否适用于当前封包
+        if (bSend && !rule.forSend) continue;
+        if (!bSend && !rule.forRecv) continue;
+        
+        // 将搜索字符串转换为字节数组
+        std::vector<BYTE> searchBytes = StringToHex(rule.searchHex);
+        if (searchBytes.empty()) continue;
+        
+        // 在封包中搜索匹配
+        std::vector<BYTE> dataBytes(pData, pData + *pdwSize);
+        bool found = false;
+        
+        // 简单搜索：检查搜索字符串是否是封包的子串
+        for (size_t i = 0; i + searchBytes.size() <= dataBytes.size(); i++) {
+            bool match = true;
+            for (size_t j = 0; j < searchBytes.size(); j++) {
+                if (dataBytes[i + j] != searchBytes[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (found) {
+            if (rule.type == HIJACK_BLOCK) {
+                // 拦截：返回空封包
+                *pdwSize = 0;
+                return true;
+            } else if (rule.type == HIJACK_REPLACE) {
+                // 替换：替换整个封包或部分内容
+                if (pModifiedData && !rule.replaceHex.empty()) {
+                    std::vector<BYTE> replaceBytes = StringToHex(rule.replaceHex);
+                    if (!replaceBytes.empty()) {
+                        // 简单实现：替换整个封包
+                        *pModifiedData = replaceBytes;
+                        *pdwSize = (DWORD)replaceBytes.size();
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    return false;
+}
+
+// ============================================================================
+// 保存和载入封包功能
+// ============================================================================
+
+BOOL SavePacketsToFile(const std::string& filePath) {
+    std::ofstream file(filePath);
+    if (!file.is_open()) {
+        return FALSE;
+    }
+    
+    CriticalSectionLock lock(g_packetListCS.Get());
+    
+    for (const auto& packet : g_PacketList) {
+        if (packet.bSend) {  // 只保存发送包
+            std::string hexStr = HexToString(packet.pData, packet.dwSize);
+            file << hexStr << std::endl;
+        }
+    }
+    
+    file.close();
+    return TRUE;
+}
+
+int LoadPacketsFromFile(const std::string& filePath) {
+    std::ifstream file(filePath);
+    if (!file.is_open()) {
+        return -1;
+    }
+    
+    std::string line;
+    int count = 0;
+    
+    while (std::getline(file, line)) {
+        // 去除空白字符
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+        
+        // 跳过空行
+        if (line.empty()) continue;
+        
+        // 转换为字节数组
+        std::vector<BYTE> data = StringToHex(line);
+        if (!data.empty()) {
+            // 创建封包并添加到列表
+            PACKET packet;
+            packet.dwSize = (DWORD)data.size();
+            packet.bSend = true;  // 默认为发送包
+            packet.pData = new BYTE[data.size()];
+            memcpy(packet.pData, data.data(), data.size());
+            packet.dwTime = GetTickCount();
+            
+            CriticalSectionLock lock(g_packetListCS.Get());
+            g_PacketList.push_back(packet);
+            
+            count++;
+        }
+    }
+    
+    file.close();
+    
+    // 同步到UI
+    SyncPacketsToUI();
+    
+    return count;
+}
+
+// ============================================================================
+// 自动发送功能
+// ============================================================================
+
+DWORD SendAllPackets(DWORD intervalMs, DWORD loopCount, 
+                     std::function<void(DWORD, DWORD, const std::string&)> progressCallback) {
+    if (loopCount < 1) loopCount = 1;
+    
+    DWORD totalSent = 0;
+    DWORD currentLoop = 0;
+    
+    // 复制发送包列表（避免锁住太长时间）
+    std::vector<std::vector<BYTE>> sendPackets;
+    std::vector<std::string> packetLabels;
+    
+    {
+        CriticalSectionLock lock(g_packetListCS.Get());
+        
+        for (const auto& packet : g_PacketList) {
+            if (packet.bSend && packet.dwSize > 0) {
+                std::vector<BYTE> data(packet.pData, packet.pData + packet.dwSize);
+                sendPackets.push_back(data);
+                
+                // 获取封包标签
+                std::string label = "";
+                if (packet.dwSize >= PacketProtocol::HEADER_SIZE) {
+                    size_t offset = 0;
+                    uint16_t magic = ReadUInt16LE(packet.pData, offset);  // Magic: offset 0-1
+                    uint16_t length = ReadUInt16LE(packet.pData, offset); // Length: offset 2-3
+                    if (magic == PacketProtocol::MAGIC_NORMAL || magic == PacketProtocol::MAGIC_COMPRESSED) {
+                        uint32_t opcode = ReadUInt32LE(packet.pData, offset);  // Opcode: offset 4-7
+                        label = GetPacketLabel(opcode, true);
+                    }
+                }
+                packetLabels.push_back(label);
+            }
+        }
+    }
+    
+    // 循环发送
+    g_bStopAutoSend = false;
+    for (DWORD loop = 0; loop < loopCount && !g_bStopAutoSend; ++loop) {
+        currentLoop = loop + 1;
+        
+        for (size_t i = 0; i < sendPackets.size() && !g_bStopAutoSend; ++i) {
+            // 调用进度回调
+            if (progressCallback) {
+                progressCallback(currentLoop, (DWORD)i + 1, packetLabels[i]);
+            }
+            
+            // 复制封包数据（用于可能的修改）
+            std::vector<BYTE> packetData = sendPackets[i];
+            
+            // 检查是否为战斗封包 (OP_CLIENT_CLICK_NPC = 1186048)
+            // 封包结构: 12字节头部 + 4字节Body (counter)
+            if (packetData.size() >= 16) {
+                size_t offset = 0;
+                uint16_t magic = ReadUInt16LE(packetData.data(), offset);  // Magic: offset 0-1
+                uint16_t length = ReadUInt16LE(packetData.data(), offset); // Length: offset 2-3
+                
+                if (magic == PacketProtocol::MAGIC_NORMAL || magic == PacketProtocol::MAGIC_COMPRESSED) {
+                    uint32_t opcode = ReadUInt32LE(packetData.data(), offset);  // Opcode: offset 4-7
+                    
+                    if (opcode == Opcode::CLICK_NPC) {  // 1186048 - 发起战斗
+                        // 获取当前 counter 值（从全局变量）
+                        uint32_t currentCounter = g_battleCounter.load();
+                        if (currentCounter == 0) {
+                            currentCounter = 1;
+                        }
+                        
+                        // 更新 Body 中的 counter（偏移12-15，小端序）
+                        packetData[12] = static_cast<BYTE>(currentCounter & 0xFF);
+                        packetData[13] = static_cast<BYTE>((currentCounter >> 8) & 0xFF);
+                        packetData[14] = static_cast<BYTE>((currentCounter >> 16) & 0xFF);
+                        packetData[15] = static_cast<BYTE>((currentCounter >> 24) & 0xFF);
+                        
+                        // 可选：更新进度回调显示counter已更新
+                        if (progressCallback) {
+                            char msg[256];
+                            sprintf_s(msg, "[Counter已更新: %u] %s", currentCounter, packetLabels[i].c_str());
+                            progressCallback(currentLoop, (DWORD)i + 1, msg);
+                        }
+                    }
+                }
+            }
+            
+            if (SendPacket(0, packetData.data(), (DWORD)packetData.size())) {
+                totalSent++;
+            }
+            
+            if (intervalMs > 0) {
+                Sleep(intervalMs);
+            }
+        }
+    }
+    
+    return totalSent;
+}
+
+VOID StopAutoSend() {
+    g_bStopAutoSend = true;
+}
+
+BOOL SavePacketListToFile(const std::wstring& filePath) {
+    std::ofstream file(filePath, std::ios::out | std::ios::trunc);
+    if (!file.is_open()) {
+        return FALSE;
+    }
+    
+    std::vector<PACKET> packetsCopy;
+    {
+        CriticalSectionLock lock(g_packetListCS.Get());
+        packetsCopy = g_PacketList;
+    }
+    
+    for (const auto& packet : packetsCopy) {
+        if (packet.bSend && packet.pData && packet.dwSize > 0) {
+            std::string hexStr = HexToString(packet.pData, packet.dwSize);
+            file << hexStr << std::endl;
+        }
+    }
+    
+    file.close();
+    return TRUE;
+}
+
+BOOL LoadPacketListFromFile(const std::wstring& filePath) {
+    std::ifstream file(filePath, std::ios::in);
+    if (!file.is_open()) {
+        return FALSE;
+    }
+    
+    // 先清空现有封包列表
+    ClearPacketList();
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        // 移除空白字符
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+        
+        if (!line.empty()) {
+            std::vector<BYTE> data = StringToHex(line);
+            if (!data.empty()) {
+                // 添加到封包列表
+                PACKET packet;
+                packet.dwSize = static_cast<DWORD>(data.size());
+                packet.bSend = TRUE;
+                packet.pData = new BYTE[data.size()];
+                memcpy(packet.pData, data.data(), data.size());
+                packet.dwTime = GetTickCount();
+                
+                {
+                    CriticalSectionLock lock(g_packetListCS.Get());
+                    g_PacketList.push_back(packet);
+                }
+            }
+        }
+    }
+    
+    file.close();
+    return TRUE;
+}
+
+// 一键完成所有选中的日常活动
+void SendDailyTasksAsync(DWORD flags) {
+    if (flags == 0) return;
+    
+    DailyTaskData* taskData = new DailyTaskData();
+    taskData->flags = flags;
+    taskData->hwnd = g_hWnd;
+    
+    HANDLE hThread = CreateThread(NULL, 0, DailyTaskThreadProc, taskData, 0, NULL);
+    if (hThread) {
+        CloseHandle(hThread);
+    } else {
+        delete taskData;
+    }
+}
+
+// ============================================================================
+// 一键采集实现
+// ============================================================================
+
+/** 采集物品数据结构 */
+
+struct CollectItemData {
+
+    const wchar_t* name;   ///< 物品名称
+
+    uint32_t mapId;        ///< 地图ID
+
+    uint32_t stuffId;      ///< 物品ID
+
+    int maxCount;          ///< 最大采集次数
+
+};
+
+
+
+/** 采集物品列表（按易语言代码顺序）
+
+
+
+ * 
+
+
+
+ * 封包编码规则（重要！）：
+
+
+
+ * - 封包中所有数值字段都是小端序存储
+
+
+
+ * - 例如：封包 A10F0000 小端序解读 = 0x00000FA1 = 4001
+
+
+
+ * - 例如：封包 F6930400 小端序解读 = 0x000493F6 = 299254
+
+
+
+ * - 构造封包时，数值需要以小端序写入
+
+
+
+ */
+
+
+
+
+
+
+
+static const CollectItemData COLLECT_ITEMS[] = {
+
+
+
+
+
+
+
+    // 名称        mapId    stuffId   次数
+
+
+
+
+
+
+
+    // stuffId 从易语言封包解析：小端序读取
+
+
+
+
+
+
+
+    // 例如：FC930400 → 0x000493FC = 300028
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    {L"上清宝玉", 4001,  300022,  3},   // F6930400 → 0x000493F6 (易语言代码改为3次)
+
+
+
+
+
+
+
+    {L"天地灵气", 6002,  300028,  2},   // FC930400 → 0x000493FC (易语言代码改为2次)
+    {L"火云岩",   8001,  300019,  3},   // F3930400 → 0x000493F3
+    {L"千年红木", 2004,  300016,  3},   // F0930400 → 0x000493F0
+    {L"远古青松", 4002,  300017,  3},   // F1930400 → 0x000493F1
+    {L"精蓝石",   9002,  300021,  5},   // F5930400 → 0x000493F5, mapId 0x232A=9002 (小端序: 2A23)
+    {L"松绿石",   5001,  300025,  5},   // F9930400 → 0x000493F9
+    {L"冰霜岩",   3004,  300018,  4},   // F2930400 → 0x000493F2, mapId 0x0BBC=3004 (小端序: BC0B)
+    {L"幻影石",   2101,  300015,  4},   // EF930400 → 0x000493EF (结束用FF93)
+    {L"冰晶砂",   3004,  300023,  5},   // F7930400 → 0x000493F7, mapId 0x0BBC=3004 (小端序: BC0B)
+    {L"天罡石",   6002,  300020,  4},   // F4930400 → 0x000493F4
+    {L"茅山玉",   7001,  300024,  5},   // F8930400 → 0x000493F8, mapId 0x1B59=7001 (小端序: 591B)
+    {L"神明果",   6003,  300030,  5},   // FE930400 → 0x000493FE (改为5次)
+    {L"朱砂石",   9002,  300026,  5},   // FA930400 → 0x000493FA, mapId 0x232A=9002
+    {L"青金石",   9002,  300027,  5},   // FB930400 → 0x000493FB, mapId 0x232A=9002
+    {L"坐骑蛋",   2003,  0,      0},    // 特殊处理
+
+};
+
+static const int COLLECT_ITEM_COUNT = sizeof(COLLECT_ITEMS) / sizeof(COLLECT_ITEMS[0]);
+
+/** 辅助函数：格式化十六进制数为字符串 */
+static std::wstring fmt_hex(uint32_t value) {
+    wchar_t buf[16];
+    swprintf_s(buf, L"%04X", value);
+    return std::wstring(buf);
+}
+
+/** 采集单个物品 */
+static BOOL CollectSingleItem(const CollectItemData& item) {
+    if (item.maxCount == 0) {
+        // 坐骑蛋特殊处理
+        return TRUE;
+    }
+
+    // 1. 跳转地图封包: Opcode 1184313, Params=mapId
+    auto mapPacket = PacketBuilder()
+        .SetOpcode(1184313)
+        .SetParams(static_cast<uint32_t>(item.mapId))
+        .Build();
+
+    if (!SendPacket(g_LastGameSocket, mapPacket.data(), static_cast<DWORD>(mapPacket.size()))) {
+        return FALSE;
+    }
+    Sleep(400);
+
+    // 2. 第二个封包: Opcode 1184319
+    auto packet2 = PacketBuilder()
+        .SetOpcode(1184319)
+        .SetParams(0)
+        .Build();
+
+    if (!SendPacket(g_LastGameSocket, packet2.data(), static_cast<DWORD>(packet2.size()))) {
+        return FALSE;
+    }
+    Sleep(265);
+
+    // 3. 第三个封包: Opcode 1184798
+    auto packet3 = PacketBuilder()
+        .SetOpcode(1184798)
+        .SetParams(0)
+        .Build();
+
+    if (!SendPacket(g_LastGameSocket, packet3.data(), static_cast<DWORD>(packet3.size()))) {
+        return FALSE;
+    }
+    Sleep(265);
+
+    // 循环采集（基于响应包判断完成）
+    for (int i = 0; i < item.maxCount; i++) {
+        // 重置采集状态
+        g_collectStatus = 0;
+        g_collectFinished = false;
+        
+        // 4. 开始采集封包: Opcode 1187106, Params=1, Body=stuffId
+        auto startPacket = PacketBuilder()
+            .SetOpcode(1187106)
+            .SetParams(1)
+            .WriteInt32(item.stuffId)
+            .Build();
+
+        if (!SendPacket(g_LastGameSocket, startPacket.data(), static_cast<DWORD>(startPacket.size()))) {
+            return FALSE;
+        }
+
+        // 更新提示（使用宽字符串，显示地图名称）
+        std::wstring mapName = GetMapName(item.mapId);
+        std::wstring msg = L"正在采集: ";
+        msg.append(item.name);
+        msg.append(L" (");
+        msg.append(mapName.empty() ? L"未知地图" : mapName);
+        msg.append(L", ");
+        msg.append(std::to_wstring(i + 1));
+        msg.append(L"/");
+        msg.append(std::to_wstring(item.maxCount));
+        msg.append(L")");
+        UIBridge::Instance().UpdateHelperText(msg);
+
+        // 等待服务端返回 statusid=1（开始采集动画）
+        // 超时设置：最多等待 3 秒
+        int waitCount = 0;
+        while (g_collectStatus != 1 && waitCount < 30) {
+            Sleep(100);
+            waitCount++;
+            // 检查错误状态
+            if (g_collectStatus == -1) {
+                // 每日采集次数用完
+                UIBridge::Instance().UpdateHelperText(std::wstring(item.name) + L": 每日采集次数已用完");
+                return FALSE;
+            }
+            if (g_collectStatus == -2) {
+                // 未装备采集工具
+                UIBridge::Instance().UpdateHelperText(std::wstring(item.name) + L": 未装备采集工具");
+                return FALSE;
+            }
+        }
+
+        // 等待采集完成响应（statusid=2 或 statusid=3）
+        // 超时设置：最多等待 15 秒（采集动画约 10-13 秒）
+        g_collectFinished = false;
+        waitCount = 0;
+        while (!g_collectFinished && waitCount < 150) {
+            Sleep(100);
+            waitCount++;
+        }
+
+        // 5. 结束采集封包: Opcode 1187106 (小端序: 221D1200)
+        BYTE endPacket[16];
+        memset(endPacket, 0, sizeof(endPacket));
+        endPacket[0] = 0x44;  // Magic: "SD"
+        endPacket[1] = 0x53;
+        endPacket[2] = 0x04;  // Length: 4 (小端序)
+        endPacket[3] = 0x00;
+        endPacket[4] = 0x22;  // Opcode: 1187106 小端序 (0x00121D22)
+        endPacket[5] = 0x1D;
+        endPacket[6] = 0x12;
+        endPacket[7] = 0x00;
+        endPacket[8] = 0x02;  // Params: 2 (结束采集)
+        endPacket[9] = 0x00;
+        endPacket[10] = 0x00;
+        endPacket[11] = 0x00;
+        // Body: stuffId 小端序写入（32位）
+        endPacket[12] = (item.stuffId) & 0xFF;
+        endPacket[13] = (item.stuffId >> 8) & 0xFF;
+        endPacket[14] = (item.stuffId >> 16) & 0xFF;
+        endPacket[15] = (item.stuffId >> 24) & 0xFF;
+
+        if (!SendPacket(g_LastGameSocket, endPacket, 16)) {
+            return FALSE;
+        }
+
+        // 如果收到 statusid=3，表示采集全部结束，跳出循环
+        if (g_collectStatus == 3) {
+            break;
+        }
+        
+        Sleep(300);
+    }
+
+    return TRUE;
+}
+
+/** 处理坐骑蛋采集 */
+static BOOL CollectMountEgg() {
+    // 坐骑蛋需要特殊处理：拾取场景中的坐骑蛋
+    // 封包格式：所有数值都是小端序
+    
+    // 1. 跳转到地图 2003: 封包 4453000039121200D3070000
+    // mapId 2003 = 0x000007D3，小端序写入: D3 07 00 00
+    BYTE mapPacket[12];
+    memset(mapPacket, 0, sizeof(mapPacket));
+    mapPacket[0] = 0x44;  // Magic: "SD"
+    mapPacket[1] = 0x53;
+    mapPacket[2] = 0x00;  // Length: 0 (小端序)
+    mapPacket[3] = 0x00;
+    mapPacket[4] = 0x39;  // Opcode: 1184313 小端序 (0x00121239)
+    mapPacket[5] = 0x12;
+    mapPacket[6] = 0x12;
+    mapPacket[7] = 0x00;
+    mapPacket[8] = 0xD3;  // mapId: 2003 小端序
+    mapPacket[9] = 0x07;
+    mapPacket[10] = 0x00;
+    mapPacket[11] = 0x00;
+    SendPacket(g_LastGameSocket, mapPacket, 12);
+    Sleep(300);
+
+    // 2. 发送拾取封包: 44530800001912007952000000000000
+    // Opcode 1185792 = 0x00121900，小端序: 00 19 12 00
+    // Params 21089 = 0x00005279，小端序: 79 52 00 00
+    BYTE packet[20];
+    memset(packet, 0, sizeof(packet));
+    packet[0] = 0x44;  // Magic: "SD"
+    packet[1] = 0x53;
+    packet[2] = 0x08;  // Length: 8 (小端序)
+    packet[3] = 0x00;
+    packet[4] = 0x00;  // Opcode: 1185792 小端序 (0x00121900)
+    packet[5] = 0x19;
+    packet[6] = 0x12;
+    packet[7] = 0x00;
+    packet[8] = 0x79;  // Params: 21089 小端序
+    packet[9] = 0x52;
+    packet[10] = 0x00;
+    packet[11] = 0x00;
+    packet[12] = 0x00;  // Body: 8字节填充
+    packet[13] = 0x00;
+    packet[14] = 0x00;
+    packet[15] = 0x00;
+    packet[16] = 0x00;
+    packet[17] = 0x00;
+    packet[18] = 0x00;
+    packet[19] = 0x00;
+    SendPacket(g_LastGameSocket, packet, 20);
+    Sleep(400);
+
+    // 3. 跳转到地图 10969: 封包 4453000039121200F92A0000
+    // mapId 10969 = 0x00002AF9，小端序: F9 2A 00 00
+    mapPacket[8] = 0xF9;
+    mapPacket[9] = 0x2A;
+    mapPacket[10] = 0x00;
+    mapPacket[11] = 0x00;
+    SendPacket(g_LastGameSocket, mapPacket, 12);
+    Sleep(300);
+
+    // 4. 发送拾取封包: Params 41220 = 0x0000A104
+    packet[8] = 0x04;  // Params: 41220 小端序
+    packet[9] = 0xA1;
+    packet[10] = 0x00;
+    packet[11] = 0x00;
+    SendPacket(g_LastGameSocket, packet, 20);
+    Sleep(400);
+
+    // 5. 跳转到地图 4103: 封包 4453000039121200A20F0000
+    // mapId 4103 = 0x00001007，小端序: 07 10 00 00
+    // 但易语言是 A20F，即 mapId 0x00000FA2 = 4002？让我重新分析
+    // A2 0F 小端序 = 0x0FA2 = 4002
+    mapPacket[8] = 0xA2;
+    mapPacket[9] = 0x0F;
+    mapPacket[10] = 0x00;
+    mapPacket[11] = 0x00;
+    SendPacket(g_LastGameSocket, mapPacket, 12);
+    Sleep(300);
+
+    // 6. 发送拾取封包
+    SendPacket(g_LastGameSocket, packet, 20);
+    Sleep(400);
+
+    // 7. 跳转到地图 10004: 封包 445300003912120014270000
+    // mapId 10004 = 0x00002714，小端序: 14 27 00 00
+    mapPacket[8] = 0x14;
+    mapPacket[9] = 0x27;
+    mapPacket[10] = 0x00;
+    mapPacket[11] = 0x00;
+    SendPacket(g_LastGameSocket, mapPacket, 12);
+    Sleep(300);
+
+    // 8. 发送拾取封包
+    SendPacket(g_LastGameSocket, packet, 20);
+    Sleep(400);
+
+    return TRUE;
+}
+
+/** 采集线程函数 */
+static DWORD WINAPI CollectThreadProc(LPVOID lpParam) {
+    DWORD flags = *(DWORD*)lpParam;
+    delete (DWORD*)lpParam;
+    
+    g_collectAutoMode = true;
+    UIBridge::Instance().UpdateHelperText(L"开始一键采集...");
+    
+    // 按照标志位采集
+    for (int i = 0; i < COLLECT_ITEM_COUNT; i++) {
+        if (!(flags & (1 << i))) {
+            continue;  // 未选中，跳过
+        }
+        
+        const CollectItemData& item = COLLECT_ITEMS[i];
+        
+        if (item.maxCount == 0) {
+            // 坐骑蛋
+            CollectMountEgg();
+            UIBridge::Instance().UpdateHelperText(L"拾取坐骑蛋完成");
+        } else {
+            // 普通采集
+            if (CollectSingleItem(item)) {
+                UIBridge::Instance().UpdateHelperText(std::wstring(item.name) + L"采集完成");
+            } else {
+                UIBridge::Instance().UpdateHelperText(std::wstring(item.name) + L"采集失败");
+            }
+        }
+        
+        Sleep(500);
+    }
+    
+    // 采集完成，返回地图
+    // 易语言封包: 445300003912120086030000
+    // 地图ID: 86 03 00 00 → 小端序 0x00000386 = 902
+    SendEnterScenePacket(902);
+    Sleep(500);
+    
+    UIBridge::Instance().UpdateHelperText(L"一键采集完成！");
+    g_collectAutoMode = false;
+    
+    return 0;
+}
+
+/** 一键采集所有选中的材料 */
+BOOL SendOneKeyCollectPacket(DWORD flags) {
+    if (flags == 0) {
+        UIBridge::Instance().UpdateHelperText(L"请先选择要采集的材料");
+        return FALSE;
+    }
+    
+    if (g_userId == 0) {
+        UIBridge::Instance().UpdateHelperText(L"请先进入游戏");
+        return FALSE;
+    }
+    
+    DWORD* pFlags = new DWORD(flags);
+    HANDLE hThread = CreateThread(NULL, 0, CollectThreadProc, pFlags, 0, NULL);
+    if (hThread) {
+        CloseHandle(hThread);
+        return TRUE;
+    } else {
+        delete pFlags;
+        UIBridge::Instance().UpdateHelperText(L"启动采集线程失败");
+        return FALSE;
+    }
+}
+
+/** 处理采集响应（在HookedRecv中调用）
+ * 
+ * 根据AS3代码 StoneControl.as 和 MainModel.as：
+ * - statusid 在封包的 Params 字段（mParams），不是 body
+ * - statusid = 1: 开始采集（播放采集动画）
+ * - statusid = 2: 采集完成，获得物品（body: stuffid, stuffcount, userid）
+ * - statusid = 3: 采集全部结束（body: userid）
+ * - statusid = 4: 额外获得物品（body: stuffid, stuffcount）
+ * - statusid = -1: 每日采集次数用完
+ * - statusid = -2: 未装备采集工具
+ */
+void ProcessCollectResponse(const GamePacket& packet) {
+    if (packet.opcode != Opcode::COLLECT_STATUS_BACK) {
+        return;
+    }
+    
+        // statusid 在封包的 Params 字段（AS3: event.msg.mParams）
+    
+        int32_t statusid = static_cast<int32_t>(packet.params);
+    
+        
+    
+        g_collectStatus = statusid;
+    
+        
+    
+        // 根据AS3代码逻辑：
+    
+        // statusid = 2 表示单次采集完成，获得物品
+    
+        // statusid = 3 表示采集全部结束
+    
+        if (statusid == 2 || statusid == 3) {
+    
+            g_collectFinished = true;
+    
+        }
+    
+        // statusid = 1: 开始采集动画，继续等待
+    
+        // statusid = -1: 每日采集次数用完
+    
+        // statusid = -2: 未装备采集工具
+    
+    }
+    
+    
+    
+    // ============ BOSS专区功能实现 ============
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    /** 发送BOSS战斗封包
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * 封包格式（根据易语言代码）：
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * - Magic: 21316 (0x5344)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * - Length: 4 (Body长度)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * - Opcode: 1186048 (OP_CLIENT_CLICK_NPC)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * - Params: spiritId (BOSS ID，小端序)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * - Body: 00 00 00 00 (最后4字节替换为0)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * @param spiritId BOSS的妖怪ID（大于10000）
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     * @return 发送是否成功
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+     */
+    
+    
+    
+    BOOL SendBattlePacket(uint32_t spiritId, uint32_t useId, uint8_t extraParam) {
+    // 直接使用全局变量 g_battleCounter
+    // 如果从未进入过战斗（counter 为 0），则使用默认值 1
+    uint32_t counter = g_battleCounter.load();
+    if (counter == 0) {
+        counter = 1;
+    }
+    
+    // 封包结构：
+    // Magic: 0x5344 (小端序)
+    // Length: 4 (Body长度，4字节)
+    // Opcode: 1186048 (OP_CLIENT_CLICK_NPC)
+    // Params: 高16位=useId，低16位=(extraParam << 8 | spiritId & 0xFF)
+    // Body: counter (小端序)
+    
+    // 组合 Params
+    uint32_t params;
+    if (extraParam == 0) {
+        // BOSS 挑战：字节 0-1=spiritId (小端序)，字节 2=0，字节 3=useId
+        params = (spiritId & 0xFFFF) | ((useId & 0xFF) << 24);
+    } else {
+        // 野怪战斗：字节 0=spiritId_low8，字节 1=extraParam，字节 2=0，字节 3=useId
+        params = (spiritId & 0xFF) | ((extraParam & 0xFF) << 8) | ((useId & 0xFF) << 24);
+    }
+    
+    // 小端序构造封包
+    std::vector<BYTE> packet(16);  // 12字节头部 + 4字节Body
+    
+    // Magic: 0x5344 (小端序)
+    packet[0] = 0x44;  // 'D'
+    packet[1] = 0x53;  // 'S'
+    
+    // Length: 4 (小端序)
+    packet[2] = 0x04;
+    packet[3] = 0x00;
+    
+    // Opcode: 1186048 (0x00121900, 小端序)
+    packet[4] = 0x00;
+    packet[5] = 0x19;
+    packet[6] = 0x12;
+    packet[7] = 0x00;
+    
+    // Params (小端序)
+    packet[8] = params & 0xFF;
+    packet[9] = (params >> 8) & 0xFF;
+    packet[10] = (params >> 16) & 0xFF;
+    packet[11] = (params >> 24) & 0xFF;
+    
+    // Body: counter (小端序)
+    packet[12] = counter & 0xFF;
+    packet[13] = (counter >> 8) & 0xFF;
+    packet[14] = (counter >> 16) & 0xFF;
+    packet[15] = (counter >> 24) & 0xFF;
+    
+    // 发送封包
+    return SendPacket(0, packet.data(), (DWORD)packet.size());
+}
+
+// ============ 采摘红莓果功能实现 (Act788) ============
+
+/**
+ * @brief 构造采摘红莓果封包
+ * @param operation 操作类型字符串
+ * @param bodyValues Body值列表
+ * @return 封包数据
+ */
+static std::vector<BYTE> BuildStrawberryPacket(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+    return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, StrawberryPick::ACTIVITY_ID, operation, bodyValues);
+}
+
+/**
+ * @brief 采摘红莓果 - 发送活动操作封包
+ */
+BOOL SendStrawberryPacket(const std::string& operation, const std::vector<int32_t>& bodyValues) {
+    std::vector<BYTE> packet = BuildStrawberryPacket(operation, bodyValues);
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), 
+                      Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+}
+
+/**
+ * @brief 采摘红莓果 - 获取游戏信息
+ */
+BOOL SendStrawberryGameInfoPacket() {
+    g_strawberryWaitingResponse = true;
+    return SendStrawberryPacket("open_ui");
+}
+
+/**
+ * @brief 采摘红莓果 - 开始游戏
+ */
+BOOL SendStrawberryStartGamePacket(int ruleFlag) {
+    g_strawberryWaitingResponse = true;
+    return SendStrawberryPacket("start_game", {ruleFlag});
+}
+
+/**
+ * @brief 采摘红莓果 - 游戏中收集物品
+ * @param category 物品类别: 1=Monkey(天上掉落), 2=Goods(地面道具)
+ * @param id 物品ID (Monkey: 1-73, Goods: 74-103)
+ * @param itemType 物品类型 (直接从awardArr/toolArr获取的原始值)
+ * 
+ * 封包格式: [game_hit, checkCode, category, id, itemType]
+ * 
+ * 校验码计算（来自AS3代码 KBMonkey.as/KBGoods.as）：
+ * checkCode = (random 1000-1999) * (serverCheckCode + id) + 8621
+ */
+BOOL SendStrawberryGameHitPacket(int category, int id, int itemType) {
+    int random_part = (rand() % 1000) + 1000;
+    int checkCode = random_part * (g_strawberryCheckCode + id) + 8621;
+    // 封包格式: [game_hit, checkCode, category, id, itemType]
+    // itemType 直接使用数组中的原始值（AS3中 type+1 是因为 type = 数组值-1）
+    return SendStrawberryPacket("game_hit", {checkCode, category, id, itemType});
+}
+
+/**
+ * @brief 采摘红莓果 - 结束游戏
+ * 
+ * 校验码计算（来自AS3代码）：
+ * checkCode = serverCheckCode & (userId % serverCheckCode)
+ */
+BOOL SendStrawberryEndGamePacket() {
+    int checkCode = g_strawberryCheckCode & (g_userId % g_strawberryCheckCode);
+    return SendStrawberryPacket("end_game", {checkCode});
+}
+
+/**
+ * @brief 采摘红莓果 - 扫荡信息
+ */
+BOOL SendStrawberrySweepInfoPacket() {
+    g_strawberryWaitingResponse = true;
+    return SendStrawberryPacket("sweep_info");
+}
+
+/**
+ * @brief 采摘红莓果 - 执行扫荡
+ */
+BOOL SendStrawberrySweepPacket() {
+    g_strawberryWaitingResponse = true;
+    return SendStrawberryPacket("sweep");
+}
+
+/**
+ * @brief 采摘红莓果一键完成线程
+ */
+DWORD WINAPI StrawberryThreadProc(LPVOID lpParam) {
+    Sleep(300);
+    
+    UIBridge::Instance().UpdateHelperText(L"采摘红莓果：正在获取游戏信息...");
+    
+    // 1. 获取游戏信息
+    SendStrawberryGameInfoPacket();
+    
+    // Wait for response (max 3 seconds)
+    for (int i = 0; i < 30 && g_strawberryWaitingResponse; i++) {
+        Sleep(100);
+    }
+    
+    // Check if has game count
+    if (g_strawberryPlayCount <= 0) {
+        UIBridge::Instance().UpdateHelperText(L"采摘红莓果：今日次数已用完");
+        return 0;
+    }
+    
+    // Check cooldown time
+    if (g_strawberryRestTime > 0) {
+        UIBridge::Instance().UpdateHelperText(L"采摘红莓果：冷却中，请稍后再试");
+        return 0;
+    }
+    
+    // 2. Decide execution method
+    if (g_strawberryUseSweep) {
+        // Method A: Use sweep
+        Sleep(300);
+        SendStrawberrySweepInfoPacket();
+        
+        for (int i = 0; i < 30 && g_strawberryWaitingResponse; i++) {
+            Sleep(100);
+        }
+        
+        Sleep(300);
+        SendStrawberrySweepPacket();
+        
+        UIBridge::Instance().UpdateHelperText(L"采摘红莓果：扫荡完成");
+    } else {
+        // Method B: Play game
+        Sleep(300);
+        SendStrawberryStartGamePacket(g_strawberryRuleFlag);
+        
+        for (int i = 0; i < 30 && g_strawberryWaitingResponse; i++) {
+            Sleep(100);
+        }
+        
+        // 检查是否有奖励物品
+        if (g_strawberryAwardArr.empty()) {
+            UIBridge::Instance().UpdateHelperText(L"采摘红莓果：未获取到奖励数据");
+            return 0;
+        }
+        
+        // 模拟游戏过程：收集物品
+        // 关键：过滤掉有害道具（石头 type=16），只收集有益道具
+        // 
+        // 物品ID规则（来自AS3代码）：
+        // - Monkey (category=1): ID = awardIndex，范围 1-73
+        // - Goods (category=2): ID = toolIndex + 73，范围 74-103
+        //
+        // awardArr[73]: 天上掉落的物品（Monkey）
+        //   - 值14=红莓果(+1), 值15=红莓果5(+5), 值16=石头(有害!)
+        // toolArr[30]: 地面道具（Goods）
+        //   - 都是有益道具（历练丹、铜钱、天香丸等）
+        
+        DWORD lastSendTime = GetTickCount();
+        DWORD minInterval = 80;  // 最小发送间隔 80ms
+        int totalCollected = 0;
+        
+        // 1. 收集天上掉落的红莓果（过滤石头）
+        // Monkey的ID从1开始，对应awardArr的索引
+        UIBridge::Instance().UpdateHelperText(L"采摘红莓果：正在收集红莓果...");
+        int monkeyId = 1;  // Monkey ID 从1开始
+        for (size_t i = 0; i < g_strawberryAwardArr.size() && monkeyId <= 73; i++) {
+            int itemType = g_strawberryAwardArr[i];
+            
+            // 过滤掉石头(itemType==16)，只收集红莓果(14,15)
+            if (itemType == 16) {
+                monkeyId++;  // ID仍然递增，但不发送封包
+                continue;    // 跳过石头
+            }
+            
+            // category=1 表示 Monkey（天上掉落）
+            // 封包格式: [game_hit, checkCode, 1, id, itemType]
+            SendStrawberryGameHitPacket(1, monkeyId, itemType);
+            monkeyId++;
+            totalCollected++;
+            
+            // 更新进度
+            if (totalCollected % 10 == 0) {
+                wchar_t msg[128];
+                swprintf_s(msg, L"采摘红莓果：已收集 %d 个红莓果...", totalCollected);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+            
+            // 智能延迟
+            DWORD now = GetTickCount();
+            DWORD elapsed = now - lastSendTime;
+            if (elapsed < minInterval) {
+                Sleep(minInterval - elapsed);
+            }
+            lastSendTime = GetTickCount();
+        }
+        
+        // 2. 收集地面道具（都是有益的）
+        // Goods的ID从74开始 = toolIndex + 73
+        UIBridge::Instance().UpdateHelperText(L"采摘红莓果：正在收集道具...");
+        int goodsId = 74;  // Goods ID 从74开始
+        for (size_t i = 0; i < g_strawberryToolArr.size() && goodsId <= 103; i++) {
+            int itemType = g_strawberryToolArr[i];
+            
+            // category=2 表示 Goods（地面道具）
+            // 封包格式: [game_hit, checkCode, 2, id, itemType]
+            SendStrawberryGameHitPacket(2, goodsId, itemType);
+            goodsId++;
+            totalCollected++;
+            
+            // 智能延迟
+            DWORD now = GetTickCount();
+            DWORD elapsed = now - lastSendTime;
+            if (elapsed < minInterval) {
+                Sleep(minInterval - elapsed);
+            }
+            lastSendTime = GetTickCount();
+        }
+        
+        Sleep(300);
+        SendStrawberryEndGamePacket();
+        
+        wchar_t msg[128];
+        swprintf_s(msg, L"采摘红莓果：游戏完成！共收集 %d 个物品", totalCollected);
+        UIBridge::Instance().UpdateHelperText(msg);
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief 采摘红莓果 - 一键完成
+ */
+BOOL SendOneKeyStrawberryPacket(bool useSweep) {
+    g_strawberryUseSweep = useSweep;
+    HANDLE hThread = CreateThread(nullptr, 0, StrawberryThreadProc, nullptr, 0, nullptr);
+    if (hThread) {
+        CloseHandle(hThread);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/**
+ * @brief 处理采摘红莓果响应
+ */
+void ProcessStrawberryResponse(const GamePacket& packet) {
+    if (packet.body.size() < 2) return;
+    
+    const BYTE* body = packet.body.data();
+    size_t offset = 0;
+    
+    // 读取操作类型字符串（小端序长度前缀）
+    uint16_t strLen = body[offset] | (body[offset + 1] << 8);
+    offset += 2;
+    
+    if (offset + strLen > packet.body.size()) return;
+    
+    std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
+    offset += strLen;
+    
+    g_strawberryWaitingResponse = false;
+    
+    if (operation == "open_ui") {
+        // open_ui response: playTime, restTime, unknown, redBerryCount, unknown, isPop, unknown, catchId, catchList[2]
+        if (offset + 32 <= packet.body.size()) {
+            g_strawberryPlayCount = ReadInt32LE(body, offset);
+            g_strawberryRestTime = ReadInt32LE(body, offset);
+            offset += 4;  // unknown
+            g_strawberryRedBerryCount = ReadInt32LE(body, offset);
+            offset += 4;  // unknown
+            g_strawberryRuleFlag = ReadInt32LE(body, offset);
+            offset += 4;  // unknown
+            int catchId = ReadInt32LE(body, offset);
+            int catchList0 = ReadInt32LE(body, offset);
+            int catchList1 = ReadInt32LE(body, offset);
+            
+            wchar_t msg[256];
+            swprintf_s(msg, L"采摘红莓果：次数=%d, 冷却=%d秒, 红莓果=%d", 
+                      g_strawberryPlayCount, g_strawberryRestTime, g_strawberryRedBerryCount);
+            UIBridge::Instance().UpdateHelperText(msg);
+        }
+    }
+    else if (operation == "start_game") {
+        if (offset + 4 <= packet.body.size()) {
+            int result = ReadInt32LE(body, offset);
+            if (result == 0) {
+                // AS3格式: result(4) + unknown(4) + checkCode(4) + awardtype(4) + awardArr[73](292) + toolArr[30](120)
+                // 至少需要 4 + 4 + 4 + 4 = 16 字节
+                if (offset + 16 <= packet.body.size()) {
+                    offset += 4;  // unknown
+                    g_strawberryCheckCode = ReadInt32LE(body, offset);
+                    g_strawberryAwardType = ReadInt32LE(body, offset);
+                    
+                    // 解析 awardArr[73]
+                    g_strawberryAwardArr.clear();
+                    for (int i = 0; i < 73 && offset + 4 <= packet.body.size(); i++) {
+                        g_strawberryAwardArr.push_back(ReadInt32LE(body, offset));
+                    }
+                    
+                    // 解析 toolArr[30]
+                    g_strawberryToolArr.clear();
+                    for (int i = 0; i < 30 && offset + 4 <= packet.body.size(); i++) {
+                        g_strawberryToolArr.push_back(ReadInt32LE(body, offset));
+                    }
+                    
+                    UIBridge::Instance().UpdateHelperText(L"采摘红莓果：游戏开始，正在收集物品...");
+                }
+            } else {
+                UIBridge::Instance().UpdateHelperText(L"采摘红莓果：开始游戏失败");
+            }
+        }
+    }
+    else if (operation == "end_game" || operation == "sweep") {
+        // result, unknown, unknown, medal, exp, coin, items...
+        if (offset + 4 <= packet.body.size()) {
+            int result = ReadInt32LE(body, offset);
+            if (result == 0 && offset + 20 <= packet.body.size()) {
+                offset += 8;  // skip 2 unknown
+                int medal = ReadInt32LE(body, offset);
+                int exp = ReadInt32LE(body, offset);
+                int coin = ReadInt32LE(body, offset);
+                
+                wchar_t msg[256];
+                swprintf_s(msg, L"采摘红莓果：获得勋章 %d, 经验 %d, 铜钱 %d", medal, exp, coin);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+        }
+    }
+    else if (operation == "sweep_info") {
+        if (offset + 4 <= packet.body.size()) {
+            int result = ReadInt32LE(body, offset);
+            if (result == 0 && offset + 20 <= packet.body.size()) {
+                offset += 8;  // skip 2 unknown
+                int medal = ReadInt32LE(body, offset);
+                int exp = ReadInt32LE(body, offset);
+                int coin = ReadInt32LE(body, offset);
+                
+                wchar_t msg[256];
+                swprintf_s(msg, L"采摘红莓果：扫荡预览，可获得勋章 %d", medal);
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+        }
+    }
+}
+    
+    // ============================================================================
+    // 福瑞宝箱功能 (HeavenFurui)
+    // ============================================================================
+    
+    // 福瑞宝箱局部静态变量
+    static std::vector<int> g_heavenFuruiBoxIds;
+    static int g_heavenFuruiCurrentMapId = 0;
+    
+    // 福瑞宝箱地图列表（用户指定的地图ID及名称）
+    static const std::vector<int> HEAVEN_FURUI_MAPS = {
+        // 大唐
+        2001,   // 长安城
+        2002,   // 皇宫
+        2003,   // 双叉岭
+        2004,   // 五指山
+        2005,   // 五指山顶
+        2006,   // 炼丹阁
+        2008,   // 逍遥仙境
+        // 大唐边境
+        2101,   // 蛇盘山
+        2102,   // 黑风山
+        2103,   // 高老庄
+        // 乌斯藏国
+        3001,   // 乌斯藏国国都
+        3002,   // 黄风岭
+        3003,   // 流沙河
+        3004,   // 白骨山
+        3006,   // 白骨洞
+        // 宝象国
+        4001,   // 宝象国国都
+        4002,   // 黑松林
+        4003,   // 平顶山
+        // 乌鸡国
+        5001,   // 枯松涧
+        5002,   // 黑水河
+        5003,   // 乌鸡国国都
+        // 车迟国
+        6001,   // 车迟国都
+        6002,   // 通天河
+        6003,   // 金兜山
+        6004,   // 车迟山
+        6005,   // 三清殿
+        // 女儿国
+        7001,   // 子母河
+        7002,   // 毒敌山
+        7003,   // 女儿国国都
+        7004,   // 伏魔殿
+        // 火焰山
+        8001,   // 火焰山入口
+        // 祭赛国
+        9001,   // 祭赛国国都
+        9002,   // 乱石山
+        9003,   // 荆棘岭
+        9004,   // 七绝山
+        9006,   // 碧波潭
+        // 朱紫国
+        10001,  // 朱紫国国都
+        10002,  // 麒麟山
+        10003,  // 盘丝岭
+        10004,  // 蜈蚣岭
+        // 狮驼国
+        11000,  // 狮驼国国都
+        11001,  // 狮驼岭
+        11002,  // 云雷墟
+        11003,  // 狮驼洞
+        11004,  // 后洞
+        // 封神岭
+        16001,  // 封神岭
+        16003,  // 锁灵谷
+        16004,  // 超能幻境
+        16005,  // 星空堡垒
+        16006,  // 神木林
+        // 花果山
+        30005,  // 花果山
+        // 傲来国
+        40001,  // 傲来海岸
+        // 地府
+        90001,  // 鬼门关
+        90002,  // 黄泉路
+        90003,  // 忘川河
+        90004,  // 阎王殿
+        90005,  // 内殿
+        // 活动乐园
+        18001,  // 活动乐园
+        // 獬豸洞
+        10006,  // 獬豸洞
+        // 比丘国
+        19001,  // 比丘国国都
+        19002,  // 金殿
+        19003,  // 柳林坡
+        19004,  // 陷空山
+        19005,  // 圣光神庙
+        19006,  // 镇海寺
+        19007,  // 清华洞
+        19008,  // 无底洞
+        // 灭法国
+        21001,  // 灭法国国都
+        21002,  // 宫殿
+        21003,  // 凤仙郡
+        21004,  // 蓬莱镇
+        21005,  // 隐雾山
+        21006,  // 隐雾山崖底
+        21007,  // 折岳连环洞
+        21008   // 达摩遗址
+    };
+    
+    /**
+     * @brief 构建福瑞宝箱封包
+     */
+    static std::vector<BYTE> BuildHeavenFuruiPacket(int opType, const std::vector<int32_t>& bodyValues) {
+        PacketBuilder builder;
+        builder.SetOpcode(Opcode::HEAVEN_FURUI_SEND)
+               .SetParams(HeavenFurui::ACTIVITY_ID)
+               .WriteInt32(opType)
+               .WriteInt32Array(bodyValues);
+        return builder.Build();
+    }
+    
+    /**
+     * @brief 福瑞宝箱 - 发送活动操作封包
+     */
+    BOOL SendHeavenFuruiPacket(int opType, const std::vector<int32_t>& bodyValues) {
+        std::vector<BYTE> packet = BuildHeavenFuruiPacket(opType, bodyValues);
+        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()),
+                          Opcode::HEAVEN_FURUI_BACK, WpeHook::TIMEOUT_RESPONSE);
+    }
+    
+    /**
+     * @brief 福瑞宝箱 - 查询地图是否有宝箱
+     */
+    BOOL SendHeavenFuruiQueryPacket(int mapId) {
+        g_heavenFuruiQuerySuccess = false;
+        g_heavenFuruiBoxCount = 0;
+        g_heavenFuruiBoxIds.clear();
+        g_heavenFuruiCurrentMapId = mapId;
+        return SendHeavenFuruiPacket(HeavenFurui::OP_QUERY, {mapId});
+    }
+    
+    /**
+     * @brief 福瑞宝箱 - 拾取宝箱
+     */
+    BOOL SendHeavenFuruiPickupPacket(int mapId, int boxId) {
+        return SendHeavenFuruiPacket(HeavenFurui::OP_PICKUP, {mapId, boxId});
+    }
+    
+    /**
+     * @brief 福瑞宝箱 - 确认拾取
+     */
+    BOOL SendHeavenFuruiConfirmPacket() {
+        return SendHeavenFuruiPacket(HeavenFurui::OP_CONFIRM, {0, 0});
+    }
+    
+    /**
+     * @brief 停止福瑞宝箱
+     */
+    void StopHeavenFurui() {
+        g_heavenFuruiRunning = false;
+    }
+    
+    /**
+     * @brief 设置福瑞宝箱最大开启数量
+     * @param maxBoxes 最大数量（1-30）
+     */
+    void SetHeavenFuruiMaxBoxes(int maxBoxes) {
+        if (maxBoxes < 1) maxBoxes = 1;
+        if (maxBoxes > 30) maxBoxes = 30;
+        g_heavenFuruiMaxBoxes = maxBoxes;
+    }
+    
+    /**
+     * @brief 福瑞宝箱一键完成线程
+     */
+    DWORD WINAPI HeavenFuruiThreadProc(LPVOID lpParam) {
+        Sleep(300);
+        
+        // 重置已开启数量
+        g_heavenFuruiOpenedBoxes = 0;
+        
+        // 更新辅助提示
+        auto updateHelper = [](const std::wstring& text) {
+            UIBridge::Instance().UpdateHelperText(text);
+        };
+        
+        int maxBoxes = g_heavenFuruiMaxBoxes.load();
+        wchar_t startMsg[256];
+        swprintf_s(startMsg, L"福瑞宝箱：开始查找宝箱（目标：%d个）...", maxBoxes);
+        updateHelper(startMsg);
+        
+        int totalBoxesPicked = 0;
+        
+        // 遍历所有地图
+        for (int mapId : HEAVEN_FURUI_MAPS) {
+            // 检查是否已达到目标数量或被停止
+            if (!g_heavenFuruiRunning || totalBoxesPicked >= maxBoxes) {
+                break;
+            }
+            
+            // 获取地图名称
+            std::wstring mapName = GetMapName(mapId);
+            if (mapName.empty()) {
+                mapName = std::to_wstring(mapId);
+            }
+            
+            // 更新提示
+            wchar_t msg[256];
+            swprintf_s(msg, L"福瑞宝箱：正在查看地图 [%s]...（已拾取：%d/%d）", 
+                      mapName.c_str(), totalBoxesPicked, maxBoxes);
+            updateHelper(msg);
+            
+            // 查询地图是否有宝箱
+            g_heavenFuruiQuerySuccess = false;
+            SendHeavenFuruiQueryPacket(mapId);
+            
+            // 等待响应
+            for (int i = 0; i < 10 && !g_heavenFuruiQuerySuccess && g_heavenFuruiRunning; i++) {
+                Sleep(100);
+            }
+            
+            // 如果有宝箱且未达到目标
+            if (g_heavenFuruiBoxCount > 0 && totalBoxesPicked < maxBoxes && g_heavenFuruiRunning) {
+                swprintf_s(msg, L"福瑞宝箱：在 [%s] 发现 %d 个宝箱，正在进入地图...", 
+                          mapName.c_str(), g_heavenFuruiBoxCount.load());
+                updateHelper(msg);
+                
+                // 进入地图
+                g_heavenFuruiEnteredMap = false;
+                SendEnterScenePacket(mapId);
+                
+                // 等待进入地图
+                for (int i = 0; i < 20 && !g_heavenFuruiEnteredMap && g_heavenFuruiRunning; i++) {
+                    Sleep(100);
+                }
+                
+                Sleep(500);  // 等待地图加载
+                
+                // 拾取宝箱（不超过目标数量）
+                for (int boxId : g_heavenFuruiBoxIds) {
+                    // 检查是否已达到目标或被停止
+                    if (!g_heavenFuruiRunning || totalBoxesPicked >= maxBoxes) {
+                        break;
+                    }
+                    
+                    swprintf_s(msg, L"福瑞宝箱：正在拾取宝箱 (ID: %d)...（已拾取：%d/%d）", 
+                              boxId, totalBoxesPicked + 1, maxBoxes);
+                    updateHelper(msg);
+                    
+                    // 发送拾取封包
+                    SendHeavenFuruiPickupPacket(mapId, boxId);
+                    Sleep(200);
+                    
+                    // 发送确认封包
+                    SendHeavenFuruiConfirmPacket();
+                    Sleep(200);
+                    
+                    totalBoxesPicked++;
+                    g_heavenFuruiOpenedBoxes = totalBoxesPicked;
+                    
+                    // 更新UI进度
+                    wchar_t progressJs[256];
+                    swprintf_s(progressJs, L"if(window.updateHeavenFuruiProgress) window.updateHeavenFuruiProgress(%d, %d);", 
+                              totalBoxesPicked, maxBoxes);
+                    UIBridge::Instance().ExecuteJS(progressJs);
+                }
+                
+                swprintf_s(msg, L"福瑞宝箱：已在 [%s] 拾取宝箱，当前进度：%d/%d", 
+                          mapName.c_str(), totalBoxesPicked, maxBoxes);
+                updateHelper(msg);
+                
+                Sleep(500);
+            }
+            
+            // 清空当前地图的宝箱列表
+            g_heavenFuruiBoxIds.clear();
+            g_heavenFuruiBoxCount = 0;
+        }
+        
+        // 完成
+        g_heavenFuruiRunning = false;
+        
+        // 通知UI更新按钮状态
+        UIBridge::Instance().ExecuteJS(L"if(window.onHeavenFuruiComplete) window.onHeavenFuruiComplete();");
+        
+        wchar_t finalMsg[256];
+        if (totalBoxesPicked >= maxBoxes) {
+            swprintf_s(finalMsg, L"福瑞宝箱：已完成！共拾取 %d 个宝箱（达到目标）", totalBoxesPicked);
+        } else {
+            swprintf_s(finalMsg, L"福瑞宝箱：遍历完成！共拾取 %d 个宝箱", totalBoxesPicked);
+        }
+        updateHelper(finalMsg);
+        
+        return 0;
+    }
+    
+    /**
+     * @brief 福瑞宝箱 - 一键完成
+     */
+    BOOL SendOneKeyHeavenFuruiPacket(int maxBoxes) {
+        if (g_heavenFuruiRunning) {
+            // 如果正在运行，则停止
+            g_heavenFuruiRunning = false;
+            return TRUE;
+        }
+        
+        // 设置最大宝箱数量
+        SetHeavenFuruiMaxBoxes(maxBoxes);
+        
+        g_heavenFuruiRunning = true;
+        
+        // 启动线程执行一键完成
+        HANDLE hThread = CreateThread(nullptr, 0, HeavenFuruiThreadProc, nullptr, 0, nullptr);
+        if (hThread) {
+            CloseHandle(hThread);
+            return TRUE;
+        }
+        
+        g_heavenFuruiRunning = false;
+        return FALSE;
+    }
+    
+    /**
+     * @brief 处理福瑞宝箱响应
+     * 
+     * 响应格式 (protocolId = 1):
+     * - isVailTime: 有效时间标志
+     * - clickIconFlag: 点击图标标志
+     * - boxNum: 宝箱数量
+     * - boxId[]: 宝箱ID列表
+     * - openBoxNum: 已开宝箱数量
+     */
+    void ProcessHeavenFuruiResponse(const GamePacket& packet) {
+        if (packet.params != HeavenFurui::ACTIVITY_ID) return;
+        if (packet.body.size() < 4) return;
+        
+        const BYTE* body = packet.body.data();
+        size_t offset = 0;
+        
+        // 读取 protocolId
+        int protocolId = ReadInt32LE(body, offset);
+        
+        if (protocolId == 1) {
+            // 服务器推送福瑞宝箱状态
+            g_heavenFuruiQuerySuccess = true;
+            
+            if (offset + 12 <= packet.body.size()) {
+                int isVailTime = ReadInt32LE(body, offset);
+                int clickIconFlag = ReadInt32LE(body, offset);
+                int boxNum = ReadInt32LE(body, offset);
+                
+                // 如果已有宝箱数据且新响应 boxNum=0，则忽略
+                // 这可能是进入地图后服务器的状态推送，不应覆盖查询结果
+                if (boxNum == 0 && g_heavenFuruiBoxCount > 0 && !g_heavenFuruiBoxIds.empty()) {
+                    // 保持现有数据不变，仅标记查询成功
+                    return;
+                }
+                
+                g_heavenFuruiBoxIds.clear();
+                
+                // 读取宝箱ID列表
+                for (int i = 0; i < boxNum && offset + 4 <= packet.body.size(); i++) {
+                    int boxId = ReadInt32LE(body, offset);
+                    g_heavenFuruiBoxIds.push_back(boxId);
+                }
+                
+                // 实际保存的宝箱数量（以实际读取的ID数量为准）
+                g_heavenFuruiBoxCount = static_cast<int>(g_heavenFuruiBoxIds.size());
+                
+                // 读取已开宝箱数量
+                if (offset + 4 <= packet.body.size()) {
+                    int openBoxNum = ReadInt32LE(body, offset);
+                }
+                
+                // 通知UI - 显示实际保存的宝箱数量
+                std::wstring mapName = GetMapName(g_heavenFuruiCurrentMapId);
+                if (mapName.empty()) mapName = std::to_wstring(g_heavenFuruiCurrentMapId);
+                
+                wchar_t msg[256];
+                swprintf_s(msg, L"福瑞宝箱：地图 [%s] 发现 %d 个宝箱（响应boxNum=%d, bodySize=%zu）", 
+                          mapName.c_str(), g_heavenFuruiBoxCount.load(), boxNum, packet.body.size());
+                UIBridge::Instance().UpdateHelperText(msg);
+            }
+        }
+        else if (protocolId == 6) {
+            // protocolId = 6: 服务器推送当前宝箱数量状态
+            // 根据 AS3 代码，这个响应只用于更新UI（移除按钮效果），
+            // 不应该覆盖之前查询得到的宝箱ID列表
+            // 只有在非查询状态（即服务器主动推送）时才更新
+            if (offset + 4 <= packet.body.size()) {
+                int boxNum = ReadInt32LE(body, offset);
+                // 如果当前没有保存的宝箱ID，才用这个值更新数量
+                // 否则保持查询得到的宝箱信息不变
+                if (g_heavenFuruiBoxIds.empty()) {
+                    g_heavenFuruiBoxCount = boxNum;
+                }
+                // 注意：不更新 g_heavenFuruiQuerySuccess，因为这不是查询响应
+            }
+        }
+    }
+    
+
+// ============================================================================
+// 万妖盛会PVP功能实现 (BattleSix)
+// ============================================================================
+
+// BattleSixAutoBattle 类实现
+BattleSixAutoBattle::BattleSixAutoBattle()
+    : m_currentSpiritIndex(0)
+    , m_currentSkillIndex(0)
+    , m_enemySid(0)
+    , m_enemyUniqueId(0)
+    , m_myUniqueId(0)
+    , m_isInBattle(false)
+    , m_autoBattleEnabled(false)
+    , m_autoMatching(false)
+    , m_matchCount(0)
+    , m_totalMatchCount(0)
+    , m_winCount(0)
+    , m_loseCount(0) {
+}
+
+void BattleSixAutoBattle::StartBattle() {
+    m_isInBattle = true;
+    m_currentSpiritIndex = 0;
+    m_currentSkillIndex = 0;
+    UIBridge::Instance().UpdateHelperText(L"战斗开始");
+}
+
+void BattleSixAutoBattle::EndBattle() {
+    m_isInBattle = false;
+    m_mySpirits.clear();
+    m_enemySpirits.clear();
+    UIBridge::Instance().UpdateHelperText(L"战斗结束");
+}
+
+void BattleSixAutoBattle::ParseAllSpiritsFromBattleStart(const GamePacket& packet) {
+    m_mySpirits.clear();
+    m_enemySpirits.clear();
+    
+    size_t offset = 0;
+    
+    if (packet.body.size() < 4) {
+        return;
+    }
+    
+    uint32_t myUserId = g_userId.load();
+    
+    // 根据AS3 BattleModel.as中的onBattleStartParse解析
+    // 格式：循环读取state(-1表示结束)
+    int state = ReadInt32LE(packet.body.data(), offset);
+    
+    while (state != -1 && offset + 40 <= packet.body.size()) {
+        BattleSixSpiritInfo spirit;
+        
+        spirit.sid = ReadInt32LE(packet.body.data(), offset);
+        int groupType = ReadInt32LE(packet.body.data(), offset);
+        spirit.hp = ReadInt32LE(packet.body.data(), offset);
+        spirit.maxHp = ReadInt32LE(packet.body.data(), offset);
+        spirit.level = ReadInt32LE(packet.body.data(), offset);
+        spirit.element = ReadInt32LE(packet.body.data(), offset);
+        spirit.spiritId = ReadInt32LE(packet.body.data(), offset);
+        spirit.uniqueId = ReadInt32LE(packet.body.data(), offset);
+        spirit.userId = ReadInt32LE(packet.body.data(), offset);
+        int skillCount = ReadInt32LE(packet.body.data(), offset);
+        
+        spirit.isDead = (spirit.hp <= 0);
+        
+        // 读取技能
+        for (int j = 0; j < skillCount && offset + 12 <= packet.body.size(); j++) {
+            BattleSixSkillInfo skill;
+            skill.skillId = ReadInt32LE(packet.body.data(), offset);
+            skill.currentPP = ReadInt32LE(packet.body.data(), offset);
+            skill.maxPP = ReadInt32LE(packet.body.data(), offset);
+            auto it = g_skillNames.find(skill.skillId);
+            if (it != g_skillNames.end()) skill.name = it->second;
+            auto powerIt = g_skillPowers.find(skill.skillId);
+            skill.power = (powerIt != g_skillPowers.end()) ? powerIt->second : 0;
+            skill.available = (skill.currentPP > 0);
+            spirit.skills.push_back(skill);
+        }
+        
+        // 根据AS3代码：正常战斗（包括万妖盛会PVP）使用 userId 判断敌我
+        // groupType 只在观战模式下有意义
+        bool isMy = (spirit.userId == static_cast<int>(myUserId));
+        
+        if (isMy) {
+            spirit.position = static_cast<int>(m_mySpirits.size());
+            m_mySpirits.push_back(spirit);
+        } else {
+            spirit.position = static_cast<int>(m_enemySpirits.size());
+            m_enemySpirits.push_back(spirit);
+        }
+        
+        // 读取下一个state
+        if (offset + 4 <= packet.body.size()) {
+            state = ReadInt32LE(packet.body.data(), offset);
+        } else {
+            break;
+        }
+    }
+    
+    // 设置当前出战精灵：第一个HP>0的我方精灵
+    m_currentSpiritIndex = -1;
+    for (size_t i = 0; i < m_mySpirits.size(); i++) {
+        if (m_mySpirits[i].hp > 0) {
+            m_currentSpiritIndex = static_cast<int>(i);
+            m_myUniqueId = m_mySpirits[i].uniqueId;
+            break;
+        }
+    }
+    
+    // 设置敌方目标：第一个HP>0的敌方精灵
+    m_enemySid = 0;
+    for (size_t i = 0; i < m_enemySpirits.size(); i++) {
+        if (m_enemySpirits[i].hp > 0) {
+            m_enemySid = m_enemySpirits[i].sid;
+            m_enemyUniqueId = m_enemySpirits[i].uniqueId;
+            break;
+        }
+    }
+}
+
+void BattleSixAutoBattle::UpdateMySpiritHP(int spiritSid, int hp) {
+    for (auto& spirit : m_mySpirits) {
+        if (spirit.sid == spiritSid) {
+            spirit.hp = hp;
+            spirit.isDead = (hp <= 0);
+            break;
+        }
+    }
+}
+
+void BattleSixAutoBattle::UpdateEnemySpiritHP(int spiritSid, int hp) {
+    for (auto& spirit : m_enemySpirits) {
+        if (spirit.sid == spiritSid) {
+            spirit.hp = hp;
+            spirit.isDead = (hp <= 0);
+            break;
+        }
+    }
+}
+
+bool BattleSixAutoBattle::IsMySpiritBySid(int sid) const {
+    for (const auto& spirit : m_mySpirits) {
+        if (spirit.sid == sid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int BattleSixAutoBattle::FindNextAliveSpirit(int currentIndex) {
+    for (int i = 0; i < (int)m_mySpirits.size(); i++) {
+        int index = (currentIndex + i) % m_mySpirits.size();
+        if (!m_mySpirits[index].isDead && m_mySpirits[index].hp > 0) {
+            return index;
+        }
+    }
+    return -1;  // 所有精灵都已死亡
+}
+
+void BattleSixAutoBattle::LoadCurrentSpiritSkills() {
+    if (m_currentSpiritIndex >= 0 && m_currentSpiritIndex < (int)m_mySpirits.size()) {
+        // 技能已在 ParseAllSpiritsFromBattleStart 中加载
+    }
+}
+
+BOOL BattleSixAutoBattle::OnBattleRoundStart() {
+    if (!m_autoBattleEnabled) {
+        return FALSE;
+    }
+    
+    // 检查当前精灵是否死亡
+    if (m_currentSpiritIndex >= 0 && m_currentSpiritIndex < (int)m_mySpirits.size()) {
+        int currentHp = m_mySpirits[m_currentSpiritIndex].hp;
+        bool isDead = m_mySpirits[m_currentSpiritIndex].isDead;
+        
+        if (isDead || currentHp <= 0) {
+            // 尝试切换精灵
+            if (!AutoSwitchSpirit()) {
+                return FALSE;
+            }
+            return TRUE;
+        }
+    }
+    
+    // 选择最佳技能
+    int skillIndex = SelectBestSkill();
+    if (skillIndex >= 0) {
+        const auto& skill = m_mySpirits[m_currentSpiritIndex].skills[skillIndex];
+        
+        // 获取敌方精灵的uniqueId作为target
+        int targetId = g_battleSixAuto.GetEnemyUniqueId();
+        
+        // 使用异步线程发送技能封包
+        struct SkillThreadData {
+            int skillId;
+            int targetId;
+        };
+        SkillThreadData* threadData = new SkillThreadData{skill.skillId, targetId};
+        
+        HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+            auto* data = static_cast<SkillThreadData*>(lpParam);
+            Sleep(300);
+            SendBattleSixUserOpPacket(0, data->targetId, data->skillId);
+            delete data;
+            return 0;
+        }, threadData, 0, nullptr);
+        
+        if (hThread) {
+            CloseHandle(hThread);
+            return TRUE;
+        }
+        delete threadData;
+        return FALSE;
+    }
+    
+    return FALSE;
+}
+
+void BattleSixAutoBattle::OnBattleRoundResult(const GamePacket& packet) {
+    // packet.params 表示 cmdType
+    // 0 = 普通攻击, 1 = 切换宠物, 2 = 使用道具, 3 = 逃跑
+    int cmdType = static_cast<int>(packet.params);
+    size_t offset = 0;
+    
+    if (packet.body.size() < 4) {
+        return;
+    }
+    
+    if (cmdType == 1) {
+        // 切换宠物响应
+        if (packet.body.size() < 56) {
+            return;
+        }
+        
+        int sid = ReadInt32LE(packet.body.data(), offset);
+        int uniqueId = ReadInt32LE(packet.body.data(), offset);
+        int sta = ReadInt32LE(packet.body.data(), offset);
+        
+        if (sta == 1 && offset + 44 <= packet.body.size()) {
+            // 读取新宠物数据
+            offset += 4; // skip state
+            offset += 4; // skip sid
+            offset += 4; // skip groupType
+            int hp = ReadInt32LE(packet.body.data(), offset);
+            int maxHp = ReadInt32LE(packet.body.data(), offset);
+            int level = ReadInt32LE(packet.body.data(), offset);
+            int elem = ReadInt32LE(packet.body.data(), offset);
+            int spiritId = ReadInt32LE(packet.body.data(), offset);
+            int newUniqueId = ReadInt32LE(packet.body.data(), offset);
+            offset += 4; // skip userid
+            int skillNum = ReadInt32LE(packet.body.data(), offset);
+            
+            // 更新当前宠物数据
+            for (size_t i = 0; i < m_mySpirits.size(); i++) {
+                if (m_mySpirits[i].uniqueId == newUniqueId) {
+                    m_currentSpiritIndex = static_cast<int>(i);
+                    m_myUniqueId = newUniqueId;
+                    m_mySpirits[i].hp = hp;
+                    m_mySpirits[i].maxHp = maxHp;
+                    m_mySpirits[i].level = level;
+                    m_mySpirits[i].isDead = (hp <= 0);
+                    
+                    // 更新技能
+                    m_mySpirits[i].skills.clear();
+                    for (int j = 0; j < skillNum && offset + 12 <= packet.body.size(); j++) {
+                        BattleSixSkillInfo skill;
+                        skill.skillId = ReadInt32LE(packet.body.data(), offset);
+                        skill.currentPP = ReadInt32LE(packet.body.data(), offset);
+                        skill.maxPP = ReadInt32LE(packet.body.data(), offset);
+                        auto it = g_skillNames.find(skill.skillId);
+                        if (it != g_skillNames.end()) skill.name = it->second;
+                        auto powerIt = g_skillPowers.find(skill.skillId);
+                        skill.power = (powerIt != g_skillPowers.end()) ? powerIt->second : 0;
+                        skill.available = (skill.currentPP > 0);
+                        m_mySpirits[i].skills.push_back(skill);
+                    }
+                    
+                    wchar_t msg[256];
+                    swprintf_s(msg, L"万妖盛会：新宠物上场[%d] %s", spiritId, 
+                               m_mySpirits[i].name.empty() ? L"未知" : m_mySpirits[i].name.c_str());
+                    UIBridge::Instance().UpdateHelperText(msg);
+                    break;
+                }
+            }
+        }
+    } else if (cmdType == 0) {
+        // 普通攻击结果
+        int haveBattle = ReadInt32LE(packet.body.data(), offset);
+        
+        if (haveBattle == 1) {
+            int atkId = ReadInt32LE(packet.body.data(), offset);
+            int skillId = ReadInt32LE(packet.body.data(), offset);
+            int defId = ReadInt32LE(packet.body.data(), offset);
+            int miss = ReadInt32LE(packet.body.data(), offset);
+            
+            if (miss == 0) {
+                int brust = ReadInt32LE(packet.body.data(), offset);
+                int atkHp = ReadInt32LE(packet.body.data(), offset);
+                int defHp = ReadInt32LE(packet.body.data(), offset);
+                int reboundHp = ReadInt32LE(packet.body.data(), offset);
+                
+                // 更新攻击者和防御者的HP
+                // 关键：atkHp和defHp的含义取决于谁是攻击者
+                // 当我方攻击时：atkHp是我方当前出战妖怪的HP，defHp是敌方当前出战妖怪的HP
+                // 当敌方攻击时：atkHp是敌方当前出战妖怪的HP，defHp是我方当前出战妖怪的HP
+                bool isAtkMy = IsMySpiritBySid(atkId);
+                
+                if (isAtkMy) {
+                    // 我方攻击：更新我方攻击者和敌方防御者
+                    UpdateMySpiritHP(atkId, atkHp);
+                    UpdateEnemySpiritHP(defId, defHp);
+                } else {
+                    // 敌方攻击：更新敌方攻击者和我方防御者
+                    UpdateEnemySpiritHP(atkId, atkHp);
+                    UpdateMySpiritHP(defId, defHp);
+                }
+            }
+        }
+    }
+}
+
+BOOL BattleSixAutoBattle::AutoSwitchSpirit() {
+    int nextIndex = FindNextAliveSpirit(m_currentSpiritIndex + 1);
+    
+    if (nextIndex >= 0 && nextIndex != m_currentSpiritIndex) {
+        m_currentSpiritIndex = nextIndex;
+        int spiritUniqueId = m_mySpirits[nextIndex].uniqueId;
+        m_myUniqueId = spiritUniqueId;
+        
+        // 发送切换精灵封包
+        return SendBattleSixUserOpPacket(1, spiritUniqueId, 0);
+    }
+    return FALSE;
+}
+
+int BattleSixAutoBattle::GetAliveSpiritCount() {
+    int count = 0;
+    for (const auto& spirit : m_mySpirits) {
+        if (!spirit.isDead && spirit.hp > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int BattleSixAutoBattle::GetEnemyAliveSpiritCount() {
+    int count = 0;
+    for (const auto& spirit : m_enemySpirits) {
+        if (!spirit.isDead && spirit.hp > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int BattleSixAutoBattle::SelectBestSkill() {
+    if (m_currentSpiritIndex < 0 || m_currentSpiritIndex >= (int)m_mySpirits.size()) {
+        return -1;
+    }
+    
+    const auto& spirit = m_mySpirits[m_currentSpiritIndex];
+    int bestAttackIndex = -1;    // 威力最高的攻击技能
+    int maxPower = 0;
+    int firstAvailableIndex = -1; // 第一个可用技能（备用）
+    
+    // 选择威力最高的可用攻击技能
+    for (int i = 0; i < (int)spirit.skills.size(); i++) {
+        const auto& skill = spirit.skills[i];
+        
+        if (skill.available && skill.currentPP > 0) {
+            // 记录第一个可用技能
+            if (firstAvailableIndex == -1) {
+                firstAvailableIndex = i;
+            }
+            
+            // 优先选择有威力的攻击技能
+            if (skill.power > 0 && skill.power > maxPower) {
+                maxPower = skill.power;
+                bestAttackIndex = i;
+            }
+        }
+    }
+    
+    // 如果有攻击技能，优先使用；否则使用第一个可用技能
+    return (bestAttackIndex >= 0) ? bestAttackIndex : firstAvailableIndex;
+}
+
+// 万妖盛会封包发送函数实现
+BOOL SendBattleSixCombatInfoPacket() {
+    std::vector<uint8_t> body;
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLESIX_COMBAT_INFO_SEND)
+        .SetParams(0)
+        .WriteBytes(body)
+        .Build();
+    
+    return SendPacket(0, packet.data(), packet.size());
+}
+
+BOOL SendBattleSixMatchPacket() {
+    std::vector<uint8_t> body;
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLESIX_MATCH_SEND)
+        .SetParams(0)
+        .WriteBytes(body)
+        .Build();
+    
+    g_battleSixMatching = true;
+    g_battleSixMatchSuccess = false;
+    
+    return SendPacket(0, packet.data(), packet.size());
+}
+
+BOOL SendBattleSixCancelMatchPacket() {
+    std::vector<uint8_t> body;
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLESIX_CANCEL_MATCH_SEND)
+        .SetParams(0)
+        .WriteBytes(body)
+        .Build();
+    
+    g_battleSixMatching = false;
+    
+    return SendPacket(0, packet.data(), packet.size());
+}
+
+BOOL SendBattleSixReqStartPacket() {
+    std::vector<uint8_t> body;
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLESIX_REQ_START_SEND)
+        .SetParams(0)
+        .WriteBytes(body)
+        .Build();
+    
+    return SendPacket(0, packet.data(), packet.size());
+}
+
+BOOL SendBattleSixUserOpPacket(int opType, int param1, int param2) {
+    // 根据AS3 BattleControl.as代码：
+    // opType=0 (技能攻击): sendMessage(opcode, 0, [obj.target, obj.skillId])
+    // opType=1 (切换精灵): sendMessage(opcode, 1, [obj.spiritid])
+    // opType=2 (使用道具): sendMessage(opcode, 2, [obj.packcode, obj.position, obj.sid])
+    // opType=3 (逃跑): sendMessage(opcode, 3) - 无Body
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLESIX_USER_OP_SEND)
+        .SetParams(opType);
+    
+    if (opType == 0) {
+        // 技能攻击: Body = [target, skillId]
+        packet.WriteInt32(param1);  // target
+        packet.WriteInt32(param2);  // skillId
+    } else if (opType == 1) {
+        // 切换精灵: Body = [spiritid]
+        packet.WriteInt32(param1);  // spiritUniqueId
+    }
+    // opType=3 逃跑无需Body
+    
+    auto finalPacket = packet.Build();
+    
+    return SendPacket(0, finalPacket.data(), finalPacket.size());
+}
+
+BOOL SendBattleSixEndPacket() {
+    std::vector<uint8_t> body;
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLESIX_USER_OP_SEND)
+        .SetParams(4)  // 结束战斗
+        .WriteBytes(body)
+        .Build();
+    
+    return SendPacket(0, packet.data(), packet.size());
+}
+
+// 万妖盛会响应处理函数实现
+void ProcessBattleSixMatchResponse(const GamePacket& packet) {
+    size_t offset = 0;
+    
+    if (packet.body.size() >= 4) {
+        int opponentId = ReadInt32LE(packet.body.data(), offset);
+        
+        g_battleSixMatchSuccess = true;
+        g_battleSixMatching = false;
+        
+        wchar_t msg[256];
+        swprintf_s(msg, L"万妖盛会：匹配成功，对手ID: %d", opponentId);
+        UIBridge::Instance().UpdateHelperText(msg);
+        
+        // 异步等待后请求开始战斗，避免UI卡顿
+        HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+            Sleep(2000);
+            SendBattleSixReqStartPacket();
+            return 0;
+        }, nullptr, 0, nullptr);
+        if (hThread) CloseHandle(hThread);
+    }
+}
+
+void ProcessBattleSixPrepareCombatResponse(const GamePacket& packet) {
+    UIBridge::Instance().UpdateHelperText(L"万妖盛会：准备战斗");
+    // 不需要在这里等待，让战斗开始响应自然触发
+}
+
+void ProcessBattleSixReqStartResponse(const GamePacket& packet) {
+    // 请求开始战斗的响应处理
+    UIBridge::Instance().UpdateHelperText(L"万妖盛会：已请求开始战斗");
+}
+
+void ProcessBattleSixBattleStartResponse(const GamePacket& packet) {
+    // 先调用通用战斗处理（更新 UI、解析精灵数据等）
+    PacketParser::ProcessBattlePacket(packet);
+    
+    // 注意：万妖盛会使用通用战斗 Opcode（1317120）
+    // 精灵数据已经在 packet_parser.cpp 的 ProcessBattlePacket 中转换到 g_currentBattle
+    // 但万妖盛会需要额外复制到 g_battleSixAuto 中以便自动切换精灵
+    g_battleSixAuto.StartBattle();
+    
+    // 从 g_currentBattle 复制数据到 g_battleSixAuto（与 packet_parser.cpp 中的逻辑相同）
+    BattleData& battleData = PacketParser::GetCurrentBattle();
+    if (!battleData.myPets.empty()) {
+        g_battleSixAuto.GetMySpirits().clear();
+        
+        // 复制所有我方妖怪信息
+        int spiritIndex = 0;
+        int activeSpiritIndex = 0;
+        for (size_t i = 0; i < battleData.myPets.size(); i++) {
+            const auto& src = battleData.myPets[i];
+            // 跳过占位符（spiritId为0的）
+            if (src.spiritId == 0) continue;
+            
+            BattleSixSpiritInfo spirit;
+            spirit.sid = src.sid;
+            spirit.spiritId = src.spiritId;
+            spirit.uniqueId = src.uniqueId;
+            spirit.hp = src.hp;
+            spirit.maxHp = src.maxHp;
+            spirit.level = src.level;
+            spirit.position = spiritIndex;
+            spirit.isDead = (src.hp <= 0);
+            spirit.name = src.name;
+            
+            // 记录当前出战妖怪在有效列表中的索引
+            if (static_cast<int>(i) == battleData.myActiveIndex) {
+                activeSpiritIndex = spiritIndex;
+            }
+            spiritIndex++;
+            
+            // 复制技能
+            for (const auto& srcSkill : src.skills) {
+                BattleSixSkillInfo skill;
+                skill.skillId = static_cast<int>(srcSkill.id);
+                skill.name = srcSkill.name;
+                auto powerIt = g_skillPowers.find(skill.skillId);
+                skill.power = (powerIt != g_skillPowers.end()) ? powerIt->second : 0;
+                skill.currentPP = srcSkill.pp;
+                skill.maxPP = srcSkill.maxPp;
+                skill.available = (srcSkill.pp > 0);
+                spirit.skills.push_back(skill);
+            }
+            g_battleSixAuto.GetMySpirits().push_back(spirit);
+        }
+        
+        // 设置当前出战妖怪索引
+        g_battleSixAuto.SetCurrentSpiritIndex(activeSpiritIndex);
+        if (activeSpiritIndex < static_cast<int>(g_battleSixAuto.GetMySpirits().size())) {
+            g_battleSixAuto.SetMyUniqueId(g_battleSixAuto.GetMySpirits()[activeSpiritIndex].uniqueId);
+        }
+        
+        // 敌方信息
+        if (battleData.otherActiveIndex < static_cast<int>(battleData.otherPets.size())) {
+            g_battleSixAuto.SetEnemyUniqueId(battleData.otherPets[battleData.otherActiveIndex].uniqueId);
+        }
+    }
+}
+
+void ProcessBattleSixCombatInfoResponse(const GamePacket& packet) {
+    // 查询战斗信息响应
+    UIBridge::Instance().UpdateHelperText(L"万妖盛会：已打开界面");
+    
+    // 检查是否需要自动开始匹配
+    // 注意：不要在这里清除 m_autoMatching 标志，它应该在所有匹配完成后才清除
+    if (g_battleSixAuto.IsAutoMatching()) {
+        // 异步延迟1秒后开始匹配，避免UI卡顿
+        HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+            Sleep(1000);
+            SendBattleSixMatchPacket();
+            return 0;
+        }, nullptr, 0, nullptr);
+        if (hThread) CloseHandle(hThread);
+    }
+}
+
+void ProcessBattleSixBattleRoundStartResponse(const GamePacket& packet) {
+    // 先调用通用战斗处理（更新 UI、处理 buf 回合等）
+    PacketParser::ProcessBattlePacket(packet);
+    
+    // 自动战斗
+    if (g_battleSixAuto.IsAutoBattleEnabled()) {
+        g_battleSixAuto.OnBattleRoundStart();
+    }
+}
+
+void ProcessBattleSixBattleRoundResultResponse(const GamePacket& packet) {
+    // 先调用通用战斗处理（更新 UI、解析回合结果等）
+    PacketParser::ProcessBattlePacket(packet);
+    
+    g_battleSixAuto.OnBattleRoundResult(packet);
+}
+
+void ProcessBattleSixBattleEndResponse(const GamePacket& packet) {
+    // 先调用通用战斗处理（更新 UI、发送战斗结束提示等）
+    PacketParser::ProcessBattlePacket(packet);
+    
+    // 记录战斗结果
+    bool wasInBattle = g_battleSixAuto.IsInBattle();
+    bool wasAutoMatching = g_battleSixAuto.IsAutoMatching();
+    
+    // 计算胜负
+    int myAlive = g_battleSixAuto.GetAliveSpiritCount();
+    bool isWin = (myAlive > 0);
+    if (isWin) {
+        g_battleSixAuto.IncrementWinCount();
+    } else {
+        g_battleSixAuto.IncrementLoseCount();
+    }
+    
+    // 结束战斗
+    g_battleSixAuto.EndBattle();
+    
+    // 只有万妖盛会自动匹配模式才显示特定提示
+    if (wasAutoMatching) {
+        wchar_t msg[256];
+        if (isWin) {
+            swprintf_s(msg, L"万妖盛会：战斗胜利");
+        } else {
+            swprintf_s(msg, L"万妖盛会：战斗失败，所有精灵已阵亡");
+        }
+        UIBridge::Instance().UpdateHelperText(msg);
+    }
+    
+    // 确认战斗结束
+    SendBattleSixEndPacket();
+    
+    // 检查是否需要继续匹配（仅万妖盛会模式）
+    if (wasAutoMatching && g_battleSixAuto.GetMatchCount() > 0) {
+        g_battleSixAuto.DecrementMatchCount();
+        
+        // 显示剩余次数
+        int remaining = g_battleSixAuto.GetMatchCount();
+        int total = g_battleSixAuto.GetTotalMatchCount();
+        int wins = g_battleSixAuto.GetWinCount();
+        int loses = g_battleSixAuto.GetLoseCount();
+        
+        wchar_t continueMsg[256];
+        swprintf_s(continueMsg, L"万妖盛会：剩余%d次 (胜%d 负%d)", remaining, wins, loses);
+        UIBridge::Instance().UpdateHelperText(continueMsg);
+        
+        if (remaining > 0) {
+            // 异步延迟后开始下一轮匹配
+            HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+                Sleep(2000);  // 等待2秒
+                SendBattleSixMatchPacket();
+                return 0;
+            }, nullptr, 0, nullptr);
+            if (hThread) CloseHandle(hThread);
+        } else {
+            // 所有匹配完成，显示总结
+            wchar_t summaryMsg[256];
+            swprintf_s(summaryMsg, L"万妖盛会：完成%d次匹配 (胜%d 负%d)", total, wins, loses);
+            UIBridge::Instance().UpdateHelperText(summaryMsg);
+            g_battleSixAuto.SetAutoMatching(false);
+        }
+    }
+}
+
+// 万妖盛会一键功能实现
+BOOL SendOneKeyBattleSixPacket(int matchCount) {
+    // 启用自动战斗
+    g_battleSixAuto.SetAutoBattle(true);
+    
+    // 设置自动匹配标志和匹配次数
+    g_battleSixAuto.SetAutoMatching(true);
+    g_battleSixAuto.SetMatchCount(matchCount);
+    
+    // 先发送查询战斗信息封包（打开界面）
+    return SendBattleSixCombatInfoPacket();
+}
+
+BOOL SendCancelBattleSixPacket() {
+    // 取消匹配
+    return SendBattleSixCancelMatchPacket();
+}
+
+// ============================================================================
+// 副本跳层功能实现 (DungeonJump)
+// ============================================================================
+
+// 副本跳层全局状态
+DungeonJumpState g_dungeonJumpState;
+
+// 外部变量声明（来自packet_parser.cpp）
+extern MonsterData g_monsterData;
+
+BOOL SendDungeonJumpLayerPacket(int layer) {
+    if (layer < 1 || layer > 9999) {
+        return FALSE;
+    }
+    
+    // 构造跳层封包: Opcode=1186180, Params=0, Body=[layer(4B小端序)]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::JUMP_LAYER_SEND)
+        .SetParams(0)
+        .WriteInt32(layer)
+        .Build();
+    
+    BOOL result = SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    if (result) {
+        wchar_t msg[256];
+        swprintf_s(msg, L"副本跳层：发送跳层请求到第%d层", layer);
+        UIBridge::Instance().UpdateHelperText(msg);
+    }
+    
+    return result;
+}
+
+BOOL SendQueryDungeonInfoPacket() {
+    // 构造查询副本信息封包: Opcode=1184317, Params=0, Body=[]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::QUERY_DUNGEON_INFO)
+        .SetParams(0)
+        .Build();
+    
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+BOOL SendPrepareBattlePacket() {
+    // 构造准备战斗封包: Opcode=1184782, Params=0, Body=[]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::PREPARE_BATTLE)
+        .SetParams(0)
+        .Build();
+    
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+BOOL SendDungeonActivityPacket(int activityId, int opType, int param) {
+    // 构造副本活动操作封包: Opcode=1184833, Params=activityId, Body=[opType, param]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::DUNGEON_ACTIVITY_SEND)
+        .SetParams(activityId)
+        .WriteInt32(opType)
+        .WriteInt32(param)
+        .Build();
+    
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+BOOL SendCompleteJumpPacket() {
+    // 构造完成跳层封包: Opcode=1184771, Params=19012, Body=[]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::COMPLETE_JUMP)
+        .SetParams(19012)
+        .Build();
+    
+    BOOL result = SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    if (result) {
+        UIBridge::Instance().UpdateHelperText(L"副本跳层：完成跳层操作");
+    }
+    
+    return result;
+}
+
+BOOL SendPutSpiritToStorePacket(int spiritId) {
+    // 构造存入妖怪仓库封包: Opcode=1187333, Params=spiritId, Body=[4, 0]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::PUT_SPIRIT_STORE)
+        .SetParams(spiritId)
+        .WriteInt32(4)
+        .WriteInt32(0)
+        .Build();
+    
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+BOOL SendGetSpiritFromStorePacket(int spiritId) {
+    // 构造取出妖怪仓库封包: Opcode=1187333, Params=spiritId, Body=[0, 4]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::PUT_SPIRIT_STORE)
+        .SetParams(spiritId)
+        .WriteInt32(0)
+        .WriteInt32(4)
+        .Build();
+    
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+BOOL SendSetFirstSpiritPacket(int spiritId) {
+    // 构造设置首发妖怪封包: Opcode=1187344, Params=0, Body=[spiritId]
+    auto packet = PacketBuilder()
+        .SetOpcode(DungeonJump::SET_FIRST_SPIRIT)
+        .SetParams(0)
+        .WriteInt32(spiritId)
+        .Build();
+    
+    return SendPacket(g_LastGameSocket, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+std::vector<MonsterItem> FilterHighLevelMonsters(const std::vector<MonsterItem>& monsters) {
+    std::vector<MonsterItem> result;
+    for (const auto& monster : monsters) {
+        if (monster.level > 50) {
+            result.push_back(monster);
+        }
+    }
+    return result;
+}
+
+int FindFirstSpiritId(const std::vector<MonsterItem>& monsters) {
+    for (const auto& monster : monsters) {
+        if (monster.isfirst == 1) {
+            return monster.id;
+        }
+    }
+    return 0;
+}
+
+// 副本跳层异步线程
+static DWORD WINAPI DungeonJumpThreadProc(LPVOID lpParam) {
+    int targetLayer = g_dungeonJumpState.targetLayer;
+    
+    // 跳层开始
+    UIBridge::Instance().UpdateHelperText(L"跳层开始");
+    
+    // 查询妖怪背包
+    g_dungeonJumpState.monsterDataReceived = false;
+    SendQueryMonsterPacket();
+    
+    // 等待妖怪背包数据响应（最多等待3秒）
+    int waitCount = 0;
+    const int maxWaitCount = 30;
+    while (!g_dungeonJumpState.monsterDataReceived && waitCount < maxWaitCount) {
+        Sleep(100);
+        waitCount++;
+    }
+    
+    if (!g_dungeonJumpState.monsterDataReceived) {
+        g_dungeonJumpState.Reset();
+        return 1;
+    }
+    
+    // 获取妖怪数据
+    MonsterData& monsterData = g_monsterData;
+    if (monsterData.monsters.empty()) {
+        g_dungeonJumpState.Reset();
+        return 1;
+    }
+    
+    // 筛选高等级妖怪并记录首发
+    g_dungeonJumpState.highLevelMonsters = FilterHighLevelMonsters(monsterData.monsters);
+    g_dungeonJumpState.originalFirstSpiritId = FindFirstSpiritId(monsterData.monsters);
+    
+    // 存入高等级妖怪（无提示）
+    if (!g_dungeonJumpState.highLevelMonsters.empty()) {
+        for (const auto& monster : g_dungeonJumpState.highLevelMonsters) {
+            if (!g_dungeonJumpState.isRunning) {
+                return 1;
+            }
+            
+            if (SendPutSpiritToStorePacket(monster.id)) {
+                g_dungeonJumpState.storedMonsterCount++;
+                Sleep(200);
+            }
+        }
+    }
+    
+    // ========== 执行完整跳层流程（使用ResponseWaiter等待响应） ==========
+    
+    // 1. 发送跳层封包，等待返回 1317252
+    if (!SendDungeonJumpLayerPacket(targetLayer)) {
+        goto CLEANUP;
+    }
+    ResponseWaiter::WaitForResponse(DungeonJump::JUMP_LAYER_BACK, 3000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 2. 进入地图，等待返回 1315395 (使用项目中已有的 Opcode::ENTER_SCENE_BACK)
+    if (!SendEnterScenePacket(DungeonJump::DUNGEON_MAP_ID)) {
+        goto CLEANUP;
+    }
+    ResponseWaiter::WaitForResponse(Opcode::ENTER_SCENE_BACK, 5000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 3. 查询副本信息，等待返回 1315086
+    if (!SendQueryDungeonInfoPacket()) {
+        goto CLEANUP;
+    }
+    ResponseWaiter::WaitForResponse(DungeonJump::QUERY_DUNGEON_BACK, 3000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 4. 准备战斗，等待返回 1315854
+    if (!SendPrepareBattlePacket()) {
+        goto CLEANUP;
+    }
+    ResponseWaiter::WaitForResponse(DungeonJump::PREPARE_BATTLE_BACK, 3000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 5. 活动操作900，等待返回 1324097
+    SendDungeonActivityPacket(DungeonJump::ACTIVITY_ID_900, 1, DungeonJump::DUNGEON_MAP_ID);
+    ResponseWaiter::WaitForResponse(DungeonJump::ACTIVITY_BACK, 3000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 6. 活动操作902，等待返回 1324097
+    SendDungeonActivityPacket(DungeonJump::ACTIVITY_ID_902, 1, DungeonJump::DUNGEON_MAP_ID);
+    ResponseWaiter::WaitForResponse(DungeonJump::ACTIVITY_BACK, 3000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 7. 活动操作325，等待返回 1324097
+    SendDungeonActivityPacket(DungeonJump::ACTIVITY_ID_325, 4, DungeonJump::DUNGEON_MAP_ID);
+    ResponseWaiter::WaitForResponse(DungeonJump::ACTIVITY_BACK, 3000);
+    
+    if (!g_dungeonJumpState.isRunning) goto CLEANUP;
+    
+    // 8. 完成跳层，等待返回 1315843
+    if (!SendCompleteJumpPacket()) {
+        goto CLEANUP;
+    }
+    ResponseWaiter::WaitForResponse(DungeonJump::COMPLETE_JUMP_BACK, 3000);
+    
+    // 跳层完成
+    UIBridge::Instance().UpdateHelperText(L"跳层完成");
+    
+    // 清理和恢复流程（无提示）
+CLEANUP:
+    // 取回妖怪（无提示）
+    if (g_dungeonJumpState.storedMonsterCount > 0) {
+        for (const auto& monster : g_dungeonJumpState.highLevelMonsters) {
+            if (!g_dungeonJumpState.isRunning) break;
+            
+            if (SendGetSpiritFromStorePacket(monster.id)) {
+                g_dungeonJumpState.retrievedMonsterCount++;
+                Sleep(200);
+            }
+        }
+    }
+    
+    // 设置首发（无提示）
+    if (g_dungeonJumpState.originalFirstSpiritId > 0 && g_dungeonJumpState.isRunning) {
+        SendSetFirstSpiritPacket(g_dungeonJumpState.originalFirstSpiritId);
+        Sleep(200);
+    }
+    
+    g_dungeonJumpState.Reset();
+    return 0;
+}
+
+BOOL SendOneKeyDungeonJumpPacket(int targetLayer) {
+    if (g_dungeonJumpState.isRunning) {
+        return FALSE;
+    }
+    
+    // 设置状态
+    g_dungeonJumpState.Reset();
+    g_dungeonJumpState.isRunning = true;
+    g_dungeonJumpState.targetLayer = targetLayer;
+    
+    // 创建异步线程执行跳层流程
+    HANDLE hThread = CreateThread(nullptr, 0, DungeonJumpThreadProc, nullptr, 0, nullptr);
+    if (!hThread) {
+        g_dungeonJumpState.Reset();
+        return FALSE;
+    }
+    
+    CloseHandle(hThread);
+    return TRUE;
+}
+
+void StopDungeonJump() {
+    g_dungeonJumpState.Reset();
+}
+
+void ProcessDungeonJumpResponse(const GamePacket& packet) {
+    // 处理副本跳层相关响应
+    // 注意：使用ResponseWaiter自动处理响应，此函数保留用于未来扩展
+    if (!g_dungeonJumpState.isRunning) {
+        return;
+    }
+    
+    // ResponseWaiter会自动处理以下返回opcode：
+    // - 1317252 (JUMP_LAYER_BACK)
+    // - 1315074 (ENTER_SCENE_BACK)
+    // - 1315086 (QUERY_DUNGEON_BACK)
+    // - 1315854 (PREPARE_BATTLE_BACK)
+    // - 1324097 (ACTIVITY_BACK)
+    // - 1315843 (COMPLETE_JUMP_BACK)
+}
+
+// ============================================================================
+// 双台谷刷级功能实现 - 异步状态机模式
+// ============================================================================
+
+// 全局状态机实例
+ShuangTaiAutoBattle g_shuangtaiAuto;
+
+// 引用妖怪数据和技能威力映射
+extern MonsterData g_monsterData;
+extern std::unordered_map<int, int> g_skillPowers;
+
+// ========== 工具函数 ==========
+
+uint32_t GetLastSpiritId() {
+    if (g_monsterData.monsters.empty()) {
+        return 0;
+    }
+    return g_monsterData.monsters.back().id;
+}
+
+uint32_t GetHighestPowerSkillId(uint32_t spiritId) {
+    const MonsterItem* monster = nullptr;
+    for (const auto& m : g_monsterData.monsters) {
+        if (m.id == spiritId) {
+            monster = &m;
+            break;
+        }
+    }
+    
+    if (!monster || monster->skills.empty()) {
+        return 0;
+    }
+    
+    int maxPower = -1;
+    uint32_t bestSkillId = 0;
+    
+    for (const auto& skill : monster->skills) {
+        auto powerIt = g_skillPowers.find(skill.id);
+        int power = (powerIt != g_skillPowers.end()) ? powerIt->second : 0;
+        
+        if (power > maxPower && power > 0) {
+            maxPower = power;
+            bestSkillId = skill.id;
+        }
+    }
+    
+    return bestSkillId;
+}
+
+// ========== ShuangTaiAutoBattle 类实现 ==========
+
+ShuangTaiAutoBattle::ShuangTaiAutoBattle()
+    : m_running(false)
+    , m_state(ShuangTaiState::IDLE)
+    , m_blockBattle(false)
+    , m_petIndex(0)
+    , m_attackRound(0)
+    , m_mainPetId(0)
+    , m_mainPetSkillId(0)
+    , m_totalRounds(0) {
+}
+
+bool ShuangTaiAutoBattle::Start(bool blockBattle) {
+    if (m_running) {
+        UIBridge::Instance().UpdateHelperText(L"双台谷刷级已在运行中");
+        return false;
+    }
+    
+    // 检查妖怪背包数据
+    if (g_monsterData.monsters.empty()) {
+        UIBridge::Instance().UpdateHelperText(L"双台谷刷级：请先点击查询按钮");
+        return false;
+    }
+    
+    // 检查妖怪数量（至少需要2只）
+    if (g_monsterData.monsters.size() < 2) {
+        UIBridge::Instance().UpdateHelperText(L"双台谷刷级：需要至少2只妖怪");
+        return false;
+    }
+    
+    // 初始化宠物数据
+    if (!InitializePetData()) {
+        UIBridge::Instance().UpdateHelperText(L"双台谷刷级：无法获取主宠技能");
+        return false;
+    }
+    
+    // 设置屏蔽战斗
+    m_blockBattle = blockBattle;
+    if (blockBattle) {
+        g_blockBattle = true;
+    }
+    
+    // 设置运行状态
+    m_running = true;
+    m_totalRounds = 0;
+    
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：开始运行，共 " + 
+        std::to_wstring(g_monsterData.monsters.size()) + L" 只妖怪...");
+    
+    // 开始流程：发送初始化封包
+    SendInitPacket();
+    
+    return true;
+}
+
+void ShuangTaiAutoBattle::RequestStop() {
+    if (!m_running) return;
+    
+    // 设置请求停止标志，等待当前轮次完成后再停止
+    m_stopRequested = true;
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：将在本轮完成后停止...");
+}
+
+void ShuangTaiAutoBattle::Stop() {
+    m_running = false;
+    m_stopRequested = false;
+    
+    // 恢复屏蔽战斗状态
+    if (m_blockBattle) {
+        g_blockBattle = false;
+    }
+    
+    UpdateState(ShuangTaiState::STOPPED);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：已停止");
+}
+
+void ShuangTaiAutoBattle::Reset() {
+    m_running = false;
+    m_stopRequested = false;
+    m_state = ShuangTaiState::IDLE;
+    m_blockBattle = false;
+    m_petIndex = 0;
+    m_attackRound = 0;
+    m_mainPetId = 0;
+    m_mainPetSkillId = 0;
+    m_petIds.clear();
+    m_totalRounds = 0;
+}
+
+bool ShuangTaiAutoBattle::InitializePetData() {
+    // 获取最后一只妖怪作为主宠
+    m_mainPetId = g_monsterData.monsters.back().id;
+    
+    // 获取所有妖怪ID（包括主宠，都需要切换上场获得经验）
+    // 第一只已出战不需要切换，所以 m_petIds 包含第2只到最后一只（主宠）
+    m_petIds.clear();
+    for (size_t i = 1; i < g_monsterData.monsters.size(); i++) {
+        m_petIds.push_back(g_monsterData.monsters[i].id);
+    }
+    
+    // 获取主宠最高威力技能及其PP值
+    const MonsterItem* monster = nullptr;
+    for (const auto& m : g_monsterData.monsters) {
+        if (m.id == m_mainPetId) {
+            monster = &m;
+            break;
+        }
+    }
+    
+    if (!monster || monster->skills.empty()) {
+        return false;
+    }
+    
+    // 查找威力最高的技能
+    int maxPower = -1;
+    int bestSkillIndex = -1;
+    
+    for (size_t i = 0; i < monster->skills.size(); i++) {
+        const auto& skill = monster->skills[i];
+        auto powerIt = g_skillPowers.find(skill.id);
+        int power = (powerIt != g_skillPowers.end()) ? powerIt->second : 0;
+        
+        if (power > maxPower && power > 0) {
+            maxPower = power;
+            bestSkillIndex = static_cast<int>(i);
+        }
+    }
+    
+    if (bestSkillIndex < 0) {
+        return false;
+    }
+    
+    m_mainPetSkillId = monster->skills[bestSkillIndex].id;
+    m_mainPetSkillPP = monster->skills[bestSkillIndex].maxPp;
+    
+    // 设置最大攻击次数为技能PP值
+    m_maxAttackCount = m_mainPetSkillPP > 0 ? m_mainPetSkillPP : 8;
+    
+    return m_mainPetSkillId != 0;
+}
+
+void ShuangTaiAutoBattle::UpdateState(ShuangTaiState newState) {
+    m_state = newState;
+}
+
+// ========== 封包发送方法 ==========
+
+void ShuangTaiAutoBattle::SendInitPacket() {
+    if (!m_running) return;
+    
+    UpdateState(ShuangTaiState::INITIALIZING);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：发送初始化封包...");
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::INIT_SEND)
+        .SetParams(1)
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    // 延迟后发送跳层封包
+    struct DelayedData { ShuangTaiAutoBattle* self; };
+    DelayedData* data = new DelayedData{this};
+    
+    HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+        auto* d = static_cast<DelayedData*>(lpParam);
+        Sleep(300);
+        if (d->self->IsRunning()) {
+            d->self->SendJumpLayerPacket();
+        }
+        delete d;
+        return 0;
+    }, data, 0, nullptr);
+    
+    if (hThread) CloseHandle(hThread);
+}
+
+void ShuangTaiAutoBattle::SendJumpLayerPacket() {
+    if (!m_running) return;
+    
+    UpdateState(ShuangTaiState::JUMPING_LAYER);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：跳层到第一层...");
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::JUMP_LAYER_SEND)
+        .SetParams(2)
+        .WriteInt32(1)  // 第一层
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    // 延迟后发送进入战斗封包
+    struct DelayedData { ShuangTaiAutoBattle* self; };
+    DelayedData* data = new DelayedData{this};
+    
+    HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+        auto* d = static_cast<DelayedData*>(lpParam);
+        Sleep(300);
+        if (d->self->IsRunning()) {
+            d->self->SendEnterBattlePacket();
+        }
+        delete d;
+        return 0;
+    }, data, 0, nullptr);
+    
+    if (hThread) CloseHandle(hThread);
+}
+
+void ShuangTaiAutoBattle::SendEnterBattlePacket() {
+    if (!m_running) return;
+    
+    UpdateState(ShuangTaiState::ENTERING_BATTLE);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：进入战斗...");
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::ENTER_BATTLE_SEND)
+        .SetParams(0)
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    // 战斗开始响应由 OnBattleStartResponse 处理
+}
+
+void ShuangTaiAutoBattle::SendBattleOp1Packet() {
+    if (!m_running) return;
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::BATTLE_OP1_SEND)
+        .SetParams(0)
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+void ShuangTaiAutoBattle::SendSwitchPetPacket() {
+    if (!m_running || m_petIndex >= static_cast<int>(m_petIds.size())) return;
+    
+    UpdateState(ShuangTaiState::SWITCHING_PETS);
+    
+    uint32_t uniqueId = m_petIds[m_petIndex];
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：切换宠物 " + 
+        std::to_wstring(m_petIndex + 1) + L"/" + std::to_wstring(m_petIds.size()) + L"...");
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::USER_OP_SEND)
+        .SetParams(1)  // 切换精灵操作
+        .WriteInt32(uniqueId)
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    // 切换宠物响应由 OnBattleRoundResultResponse 处理
+}
+
+void ShuangTaiAutoBattle::SendSkillAttackPacket() {
+    if (!m_running) return;
+    
+    UpdateState(ShuangTaiState::ATTACKING);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：主宠攻击 " + 
+        std::to_wstring(m_attackRound + 1) + L"/" + std::to_wstring(m_maxAttackCount.load()) + L"...");
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::USER_OP_SEND)
+        .SetParams(0)  // 技能攻击操作
+        .WriteInt32(2)  // 技能索引+1
+        .WriteInt32(m_mainPetSkillId)
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    // 技能攻击响应由 OnBattleRoundResultResponse 处理
+}
+
+void ShuangTaiAutoBattle::SendBattleEndPacket() {
+    if (!m_running) return;
+    
+    UpdateState(ShuangTaiState::ENDING_BATTLE);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：发送战斗结束封包...");
+    
+    auto packet = PacketBuilder()
+        .SetOpcode(ShuangTai::BATTLE_END_SEND)
+        .SetParams(300)
+        .Build();
+    SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    
+    // 战斗结束响应由 OnBattleEndResponse 处理
+}
+
+// ========== 状态转换方法 ==========
+
+bool ShuangTaiAutoBattle::SwitchToNextPet() {
+    if (m_petIndex < static_cast<int>(m_petIds.size())) {
+        // 还有宠物需要切换
+        SendSwitchPetPacket();
+        return true;
+    } else {
+        // 所有宠物已切换完毕，开始主宠攻击
+        m_attackRound = 0;
+        SendSkillAttackPacket();
+        return false;
+    }
+}
+
+void ShuangTaiAutoBattle::StartNewRound() {
+    // 重置回合状态
+    // 注意：petIndex 会在 OnBattleStartResponse 中初始化
+    m_attackRound = 0;
+    m_totalRounds++;
+    
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：开始第 " + 
+        std::to_wstring(m_totalRounds + 1) + L" 轮...");
+    
+    // 发送初始化封包开始新一轮
+    SendInitPacket();
+}
+
+// ========== 响应处理方法 ==========
+
+void ShuangTaiAutoBattle::OnBattleStartResponse(const GamePacket& packet) {
+    if (!m_running) return;
+    
+    UpdateState(ShuangTaiState::IN_BATTLE);
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：战斗开始，准备切换宠物...");
+    
+    // m_petIds 包含第2只到最后一只（主宠）
+    // 第一只妖怪已自动出战，从 m_petIds[0]（第2只）开始切换
+    m_petIndex = 0;
+    m_attackRound = 0;
+    
+    // 延时后开始切换宠物（有等待响应）
+    struct DelayedData { ShuangTaiAutoBattle* self; };
+    DelayedData* data = new DelayedData{this};
+    
+    HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+        auto* d = static_cast<DelayedData*>(lpParam);
+        Sleep(300);
+        if (d->self->IsRunning()) {
+            // 发送战斗操作封包
+            auto packet = PacketBuilder()
+                .SetOpcode(ShuangTai::BATTLE_OP1_SEND)
+                .SetParams(0)
+                .Build();
+            SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+            
+            Sleep(300);
+            if (d->self->IsRunning()) {
+                d->self->SwitchToNextPet();
+            }
+        }
+        delete d;
+        return 0;
+    }, data, 0, nullptr);
+    
+    if (hThread) CloseHandle(hThread);
+}
+
+void ShuangTaiAutoBattle::OnBattleRoundStartResponse() {
+    if (!m_running) return;
+    
+    // 回合开始，仅在攻击状态时处理
+    ShuangTaiState currentState = m_state.load();
+    
+    if (currentState == ShuangTaiState::ATTACKING) {
+        // 攻击后的回合开始，继续攻击或结束战斗
+        m_attackRound++;
+        
+        if (m_attackRound < m_maxAttackCount.load()) {
+            // 延迟后继续攻击
+            struct DelayedData { ShuangTaiAutoBattle* self; };
+            DelayedData* data = new DelayedData{this};
+            
+            HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+                auto* d = static_cast<DelayedData*>(lpParam);
+                Sleep(300);
+                if (d->self->IsRunning()) {
+                    d->self->SendSkillAttackPacket();
+                }
+                delete d;
+                return 0;
+            }, data, 0, nullptr);
+            
+            if (hThread) CloseHandle(hThread);
+        } else {
+            // 攻击完成，结束战斗
+            struct DelayedData { ShuangTaiAutoBattle* self; };
+            DelayedData* data = new DelayedData{this};
+            
+            HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+                auto* d = static_cast<DelayedData*>(lpParam);
+                Sleep(300);
+                if (d->self->IsRunning()) {
+                    d->self->SendBattleEndPacket();
+                }
+                delete d;
+                return 0;
+            }, data, 0, nullptr);
+            
+            if (hThread) CloseHandle(hThread);
+        }
+    }
+}
+
+void ShuangTaiAutoBattle::OnBattleRoundResultResponse(const GamePacket& packet) {
+    if (!m_running) return;
+    
+    // packet.params 表示 cmdType
+    // 0 = 普通攻击, 1 = 切换宠物, 2 = 使用道具, 3 = 逃跑
+    int cmdType = static_cast<int>(packet.params);
+    
+    // 发送确认封包
+    auto ackPacket = PacketBuilder()
+        .SetOpcode(ShuangTai::BATTLE_OP2_SEND)
+        .SetParams(0)
+        .Build();
+    SendPacket(0, ackPacket.data(), static_cast<DWORD>(ackPacket.size()));
+    
+    // 只有切换宠物响应(cmdType=1)才继续下一只
+    if (cmdType == 1 && m_state.load() == ShuangTaiState::SWITCHING_PETS) {
+        // 切换成功，准备切换下一只
+        m_petIndex++;
+        
+        // 延迟后继续切换
+        struct DelayedData { ShuangTaiAutoBattle* self; };
+        DelayedData* data = new DelayedData{this};
+        
+        HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+            auto* d = static_cast<DelayedData*>(lpParam);
+            Sleep(300);
+            if (d->self->IsRunning()) {
+                d->self->SwitchToNextPet();
+            }
+            delete d;
+            return 0;
+        }, data, 0, nullptr);
+        
+        if (hThread) CloseHandle(hThread);
+    }
+}
+
+void ShuangTaiAutoBattle::OnBattleEndResponse(const GamePacket& packet) {
+    if (!m_running) return;
+    
+    m_totalRounds++;
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：第 " + 
+        std::to_wstring(m_totalRounds) + L" 轮完成");
+    
+    // 检查是否请求停止
+    if (m_stopRequested) {
+        // 完成当前轮次后停止
+        m_running = false;
+        m_stopRequested = false;
+        
+        // 恢复屏蔽战斗状态
+        if (m_blockBattle) {
+            g_blockBattle = false;
+        }
+        
+        UpdateState(ShuangTaiState::STOPPED);
+        UIBridge::Instance().UpdateHelperText(L"双台谷刷级：已完成 " + 
+            std::to_wstring(m_totalRounds) + L" 轮，已停止");
+        return;
+    }
+    
+    UIBridge::Instance().UpdateHelperText(L"双台谷刷级：第 " + 
+        std::to_wstring(m_totalRounds) + L" 轮完成，准备下一轮...");
+    
+    // 延迟后开始新一轮
+    struct DelayedData { ShuangTaiAutoBattle* self; };
+    DelayedData* data = new DelayedData{this};
+    
+    HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+        auto* d = static_cast<DelayedData*>(lpParam);
+        Sleep(300);
+        if (d->self->IsRunning()) {
+            d->self->StartNewRound();
+        }
+        delete d;
+        return 0;
+    }, data, 0, nullptr);
+    
+    if (hThread) CloseHandle(hThread);
+}
+
+// ========== 外部接口函数 ==========
+
+BOOL SendOneKeyShuangTaiPacket(bool blockBattle) {
+    return g_shuangtaiAuto.Start(blockBattle) ? TRUE : FALSE;
+}
+
+void StopShuangTai() {
+    g_shuangtaiAuto.RequestStop();
+}
+
+// 查询相关的全局变量（用于异步查询）
+bool g_shuangtaiWaitingForMonsterData = false;
+
+BOOL QueryShuangTaiMonsters() {
+    UIBridge::Instance().UpdateHelperText(L"双台谷：正在查询妖怪数据...");
+    
+    // 每次都重新查询，确保获取最新的妖怪背包数据
+    // 设置标志，等待响应后更新UI
+    g_shuangtaiWaitingForMonsterData = true;
+    
+    // 发送查询妖怪背包封包
+    SendQueryMonsterPacket();
+    
+    return TRUE;
+}
+
+void UpdateShuangTaiUIFromMonsterData() {
+    // 检查妖怪数量
+    size_t petCount = g_monsterData.monsters.size();
+    if (petCount < 2) {
+        UIBridge::Instance().UpdateHelperText(L"双台谷：需要至少2只妖怪，当前只有 " + std::to_wstring(petCount) + L" 只");
+        return;
+    }
+    
+    // 获取最后一只妖怪信息（主宠）
+    const auto& mainPet = g_monsterData.monsters.back();
+    std::wstring petName = mainPet.name;
+    
+    // 获取最高威力技能名称
+    uint32_t bestSkillId = GetHighestPowerSkillId(mainPet.id);
+    std::wstring skillName = L"未知技能";
+    for (const auto& skill : mainPet.skills) {
+        if (skill.id == bestSkillId) {
+            skillName = skill.name;
+            break;
+        }
+    }
+    
+    // 更新UI
+    std::wstring jsScript = L"if(window.updateShuangTaiUI) { window.updateShuangTaiUI('" 
+        + petName + L"', '" + skillName + L"', " + std::to_wstring(petCount) + L", true); }";
+    
+    if (g_hWnd) {
+        wchar_t* pScript = new wchar_t[jsScript.length() + 1];
+        wcscpy_s(pScript, jsScript.length() + 1, jsScript.c_str());
+        PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript);
+    }
+    
+    UIBridge::Instance().UpdateHelperText(L"双台谷：已读取 " + std::to_wstring(petCount) + L" 只妖怪，主宠: " + petName);
+}
+
+// ========== 响应处理函数（注册到 ResponseDispatcher）==========
+
+void ProcessShuangTaiBattleStartResponse(const GamePacket& packet) {
+    g_shuangtaiAuto.OnBattleStartResponse(packet);
+    // 继续执行通用战斗数据解析，确保UI能正常显示战斗数据
+    PacketParser::ProcessBattlePacket(packet);
+}
+
+void ProcessShuangTaiBattleRoundStartResponse(const GamePacket& packet) {
+    g_shuangtaiAuto.OnBattleRoundStartResponse();
+    // 继续执行通用战斗数据解析，确保UI能正常显示战斗数据
+    PacketParser::ProcessBattlePacket(packet);
+}
+
+void ProcessShuangTaiBattleRoundResultResponse(const GamePacket& packet) {
+    g_shuangtaiAuto.OnBattleRoundResultResponse(packet);
+    // 继续执行通用战斗数据解析，确保UI能正常显示战斗数据
+    PacketParser::ProcessBattlePacket(packet);
+}
+
+void ProcessShuangTaiBattleEndResponse(const GamePacket& packet) {
+    g_shuangtaiAuto.OnBattleEndResponse(packet);
+    // 继续执行通用战斗数据解析，确保UI能正常显示战斗数据
+    PacketParser::ProcessBattlePacket(packet);
+}
+
+

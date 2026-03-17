@@ -1,0 +1,61 @@
+# 构建输出
+build_new/
+build/
+out/
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.sln
+*.suo
+*.user
+*.sdf
+*.opensdf
+*.pdb
+ipch/
+
+# 编译产物
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.pdb
+
+# CMake 缓存
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+venv/
+.venv/
+
+# 游戏相关文件 - 排除不上传
+swf_cache/
+src/
+*.swf
+
+# 临时文件和缓存
+*.tmp
+*.temp
+*.log
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store

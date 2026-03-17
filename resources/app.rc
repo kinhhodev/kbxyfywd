@@ -1,0 +1,35 @@
+// 应用程序资源文件
+#include <windows.h>
+
+// 应用程序图标
+1 ICON "app.ico"
+
+// 版本信息 (Unicode)
+1 VERSIONINFO
+FILEVERSION     1,0,3,0
+PRODUCTVERSION  1,0,3,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "KBWebUI"
+            VALUE "FileDescription", "\x5361\x5e03\x897f\x6e38\x5fae\x7aef"
+            VALUE "FileVersion", "1.0.3.0"
+            VALUE "InternalName", "KBWebUI"
+            VALUE "LegalCopyright", "Copyright (C) 2025"
+            VALUE "OriginalFilename", "WebView2Demo.exe"
+            VALUE "ProductName", "\x5361\x5e03\x897f\x6e38\x5fae\x7aef"
+            VALUE "ProductVersion", "1.0.3.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
