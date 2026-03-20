@@ -62,9 +62,9 @@
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--color-background); height: 100vh; overflow: visible; color: var(--color-text-primary); font-size: 11px; font-weight: 400; } 
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; background: var(--color-background); height: 100vh; overflow: visible; color: var(--color-text-primary); font-size: 11px; font-weight: 400; }
         
-        /* 自定义标题栏样式 - 浅色主题 */
+        /* 自定义标题栏样式 *//* 自定义标题栏样式 - 浅色主题 */
         .title-bar {
             position: fixed;
             top: 0;
@@ -663,6 +663,31 @@
             flex-direction: column;
         }
 
+        /* 道具选择按钮样式 */
+        .item-btn {
+            padding: 2px 5px;
+            font-size: 8px;
+            background: #fafafa;
+            color: #333;
+            border: 1px solid #e0e0e0;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }
+        
+        .item-btn:hover {
+            background: #f0f0f0;
+            border-color: #bdbdbd;
+        }
+        
+        .item-btn.selected {
+            background: #e3f2fd;
+            color: #1976d2;
+            border-color: #1976d2;
+            font-weight: 600;
+        }
+
         /* 封包列表样式 */
         .packet-list {
             overflow-y: auto;
@@ -858,7 +883,7 @@
     <div class="title-bar">
         <div class="title-bar-left">
             <div class="title-bar-icon">卡</div>
-            <span class="title-bar-title">卡布西游浮影微端 V1.03</span>
+            <span class="title-bar-title">卡布西游浮影微端 V1.04</span>
         </div>
         <div class="title-bar-controls">
             <button class="title-bar-button" id="btn-minimize" title="最小化">
@@ -1137,45 +1162,48 @@
                     </div>
                     
                     <!-- 道具卡片 -->
-                    <div style="width: 160px; height: 150px; opacity: 0; transform: translateY(4px); animation: fadeInUp var(--duration-slow) var(--easing-enter) forwards; animation-delay: 0.3s; flex: none;">
+                    <div style="width: 230px; height: 150px; opacity: 0; transform: translateY(4px); animation: fadeInUp var(--duration-slow) var(--easing-enter) forwards; animation-delay: 0.3s; flex: none;">
                         <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; box-shadow: var(--shadow-sm); height: 100%; display: flex; flex-direction: column;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; min-height: 18px;">
                                 <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">道具</h3>
+                                <button onclick="window.refreshPackItems()" style="padding: 1px 4px; font-size: 8px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">刷新</button>
                             </div>
                             
-                            <!-- 道具列表（统一显示所有道具） -->
-                            <div id="item-list-container" style="flex: 1; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 3px; margin-bottom: 4px;">
-                                <!-- 回血道具 -->
-                                <div class="item-row" onclick="window.selectItem(100008, '小金创药', 20, 'hp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; border-bottom: 1px solid var(--color-border); font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>小金创药</span>
-                                    <span style="color: #e53935; font-size: 8px;">+20HP</span>
-                                </div>
-                                <div class="item-row" onclick="window.selectItem(100007, '中金创药', 50, 'hp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; border-bottom: 1px solid var(--color-border); font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>中金创药</span>
-                                    <span style="color: #e53935; font-size: 8px;">+50HP</span>
-                                </div>
-                                <div class="item-row" onclick="window.selectItem(100006, '大金创药', 100, 'hp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; border-bottom: 1px solid var(--color-border); font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>大金创药</span>
-                                    <span style="color: #e53935; font-size: 8px;">+100HP</span>
-                                </div>
-                                <div class="item-row" onclick="window.selectItem(100031, '活血散', 150, 'hp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; border-bottom: 1px solid var(--color-border); font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>活血散</span>
-                                    <span style="color: #e53935; font-size: 8px;">+150HP</span>
-                                </div>
-                                <!-- 回PP道具 -->
-                                <div class="item-row" onclick="window.selectItem(100010, '小型法力药剂', 5, 'mp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; border-bottom: 1px solid var(--color-border); font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>小型法力药剂</span>
-                                    <span style="color: #1976d2; font-size: 8px;">+5PP</span>
-                                </div>
-                                <div class="item-row" onclick="window.selectItem(100011, '中型法力药剂', 10, 'mp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; border-bottom: 1px solid var(--color-border); font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>中型法力药剂</span>
-                                    <span style="color: #1976d2; font-size: 8px;">+10PP</span>
-                                </div>
-                                <div class="item-row" onclick="window.selectItem(100012, '大型法力药剂', 20, 'mp')" style="display: flex; justify-content: space-between; align-items: center; padding: 3px 5px; cursor: pointer; font-size: 9.5px;" onmouseover="this.style.background='var(--color-background-hover)'" onmouseout="this.style.background='transparent'">
-                                    <span>大型法力药剂</span>
-                                    <span style="color: #1976d2; font-size: 8px;">+20PP</span>
+                            <!-- 道具选择按钮组容器（带滚动条） -->
+                            <div id="item-buttons-container" style="flex: 1; overflow-y: auto; overflow-x: hidden; margin-bottom: 4px; padding-right: 2px;">
+                                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;">
+                                    <button class="item-btn item-btn-hp" data-id="100008" onclick="window.selectItem(100008, '小金创药', 20, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">小金创药</span>
+                                        <span style="color: #e53935; font-size: 7.5px;">+20HP <span class="item-count" data-id="100008">(0)</span></span>
+                                    </button>
+                                    <button class="item-btn item-btn-hp" data-id="100007" onclick="window.selectItem(100007, '中金创药', 50, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">中金创药</span>
+                                        <span style="color: #e53935; font-size: 7.5px;">+50HP <span class="item-count" data-id="100007">(0)</span></span>
+                                    </button>
+                                    <button class="item-btn item-btn-hp" data-id="100006" onclick="window.selectItem(100006, '大金创药', 100, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">大金创药</span>
+                                        <span style="color: #e53935; font-size: 7.5px;">+100HP <span class="item-count" data-id="100006">(0)</span></span>
+                                    </button>
+                                    <button class="item-btn item-btn-hp" data-id="100031" onclick="window.selectItem(100031, '活血散', 150, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">活血散</span>
+                                        <span style="color: #e53935; font-size: 7.5px;">+150HP <span class="item-count" data-id="100031">(0)</span></span>
+                                    </button>
+                                    <button class="item-btn item-btn-mp" data-id="100010" onclick="window.selectItem(100010, '小型法力药剂', 5, 'mp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">小型法力剂</span>
+                                        <span style="color: #1976d2; font-size: 7.5px;">+5PP <span class="item-count" data-id="100010">(0)</span></span>
+                                    </button>
+                                    <button class="item-btn item-btn-mp" data-id="100011" onclick="window.selectItem(100011, '中型法力药剂', 10, 'mp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">中型法力剂</span>
+                                        <span style="color: #1976d2; font-size: 7.5px;">+10PP <span class="item-count" data-id="100011">(0)</span></span>
+                                    </button>
+                                    <button class="item-btn item-btn-mp" data-id="100012" onclick="window.selectItem(100012, '大型法力药剂', 20, 'mp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
+                                        <span class="item-name">大型法力剂</span>
+                                        <span style="color: #1976d2; font-size: 7.5px;">+20PP <span class="item-count" data-id="100012">(0)</span></span>
+                                    </button>
                                 </div>
                             </div>
+                            <!-- 选中提示 -->
+                            <div id="selected-item-hint" style="font-size: 8px; color: var(--color-text-tertiary); text-align: center; padding: 2px; background: var(--color-background-secondary); border-radius: 2px;">点击选择道具</div>
                             
                             <!-- 操作按钮 -->
                             <div style="display: flex; gap: 4px;">
@@ -1455,28 +1483,6 @@
                                     <button id="one-key-strawberry" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
                                 </div>
                             </div>
-                            <!-- 屠苏祝百寿模块 (Act643) -->
-                            <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
-                                <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">屠苏祝百寿</div>
-                                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
-                                        <input type="checkbox" id="act643-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
-                                    </label>
-                                    <button id="one-key-act643" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
-                                </div>
-                            </div>
-                            <!-- 宝盆纳万财模块 (Act768) -->
-                            <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
-                                <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">宝盆纳万财</div>
-                                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
-                                        <input type="checkbox" id="act768-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
-                                    </label>
-                                    <button id="one-key-act768" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
-                                </div>
-                            </div>
                             <!-- 驱傩聚福寿模块 (Act778) -->
                             <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
@@ -1497,6 +1503,17 @@
                                         <span>扫荡</span>
                                     </label>
                                     <button id="one-key-act793" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
+                                </div>
+                            </div>
+                            <!-- 五行镜破封印模块 (Act791) -->
+                            <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
+                                <div style="display: flex; flex-direction: column; gap: 4px;">
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">五行镜破封印</div>
+                                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
+                                        <input type="checkbox" id="act791-sweep" style="width: 10px; height: 10px; cursor: pointer;">
+                                        <span>扫荡</span>
+                                    </label>
+                                    <button id="one-key-act791" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
                                 </div>
                             </div>
                         </div>
@@ -2724,30 +2741,6 @@
             }
         };
 
-        // 屠苏祝百寿 - 一键完成
-        window.oneKeyAct643 = function() {
-            var sweepCheckbox = document.getElementById('act643-sweep');
-            var useSweep = sweepCheckbox ? sweepCheckbox.checked : false;
-            if (window.chrome && window.chrome.webview) {
-                window.chrome.webview.postMessage(JSON.stringify({ 
-                    action: 'one_key_act643',
-                    sweep: useSweep
-                }));
-            }
-        };
-
-        // 宝盆纳万财 - 一键完成
-        window.oneKeyAct768 = function() {
-            var sweepCheckbox = document.getElementById('act768-sweep');
-            var useSweep = sweepCheckbox ? sweepCheckbox.checked : false;
-            if (window.chrome && window.chrome.webview) {
-                window.chrome.webview.postMessage(JSON.stringify({ 
-                    action: 'one_key_act768',
-                    sweep: useSweep
-                }));
-            }
-        };
-
         // 驱傩聚福寿 - 一键完成
         window.oneKeyAct778 = function() {
             var sweepCheckbox = document.getElementById('act778-sweep');
@@ -2767,6 +2760,18 @@
             if (window.chrome && window.chrome.webview) {
                 window.chrome.webview.postMessage(JSON.stringify({ 
                     action: 'one_key_act793',
+                    sweep: useSweep
+                }));
+            }
+        };
+
+        // 五行镜破封印 - 一键完成
+        window.oneKeyAct791 = function() {
+            var sweepCheckbox = document.getElementById('act791-sweep');
+            var useSweep = sweepCheckbox ? sweepCheckbox.checked : false;
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(JSON.stringify({ 
+                    action: 'one_key_act791',
                     sweep: useSweep
                 }));
             }
@@ -3103,14 +3108,6 @@
             if (strawberryBtn) {
                 strawberryBtn.addEventListener('click', window.oneKeyStrawberry);
             }
-            var act643Btn = document.getElementById('one-key-act643');
-            if (act643Btn) {
-                act643Btn.addEventListener('click', window.oneKeyAct643);
-            }
-            var act768Btn = document.getElementById('one-key-act768');
-            if (act768Btn) {
-                act768Btn.addEventListener('click', window.oneKeyAct768);
-            }
             var act778Btn = document.getElementById('one-key-act778');
             if (act778Btn) {
                 act778Btn.addEventListener('click', window.oneKeyAct778);
@@ -3118,6 +3115,10 @@
             var act793Btn = document.getElementById('one-key-act793');
             if (act793Btn) {
                 act793Btn.addEventListener('click', window.oneKeyAct793);
+            }
+            var act791Btn = document.getElementById('one-key-act791');
+            if (act791Btn) {
+                act791Btn.addEventListener('click', window.oneKeyAct791);
             }
             var startHeavenFuruiBtn = document.getElementById('start-heaven-furui');
             if (startHeavenFuruiBtn) {
@@ -4367,6 +4368,39 @@
         window.selectedItemId = 0;      // 当前选中的道具ID
         window.selectedItemName = '';   // 当前选中的道具名称
         window.selectedItemValue = 0;   // 当前选中的道具效果值
+        window.itemCountMap = {};       // 道具数量映射表
+
+        /**
+         * 刷新背包物品
+         */
+        window.refreshPackItems = function() {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type: 'refresh_pack_items'
+                });
+                window.updateHelperText('正在刷新背包...');
+            }
+        };
+
+        /**
+         * 更新道具数量显示
+         * @param {Object} items - 道具数量对象 {itemId: count, ...}
+         */
+        window.updateItemCounts = function(items) {
+            window.itemCountMap = items || {};
+            // 更新每个按钮上的数量显示
+            document.querySelectorAll('.item-count').forEach(el => {
+                var itemId = el.getAttribute('data-id');
+                var count = window.itemCountMap[itemId] || 0;
+                el.textContent = '(' + count + ')';
+                // 数量为0时变红提醒
+                if (count === 0) {
+                    el.style.color = '#e53935';
+                } else {
+                    el.style.color = '';
+                }
+            });
+        };
 
         /**
          * 选择道具
@@ -4381,15 +4415,28 @@
             window.selectedItemValue = value;
             window.selectedItemType = type || 'hp';
             
-            // 更新UI选中状态
-            document.querySelectorAll('.item-row').forEach(row => {
-                row.style.background = 'transparent';
-                row.style.fontWeight = 'normal';
+            // 更新按钮选中状态
+            document.querySelectorAll('.item-btn').forEach(btn => {
+                btn.style.background = '#fafafa';
+                btn.style.color = '#333';
+                btn.style.borderColor = '#e0e0e0';
+                btn.style.fontWeight = 'normal';
             });
             
-            if (event && event.currentTarget) {
-                event.currentTarget.style.background = 'rgba(0, 120, 212, 0.1)';
-                event.currentTarget.style.fontWeight = '600';
+            // 高亮当前选中的按钮
+            const currentBtn = document.querySelector('.item-btn[data-id="' + itemId + '"]');
+            if (currentBtn) {
+                currentBtn.style.background = '#e3f2fd';
+                currentBtn.style.color = '#1976d2';
+                currentBtn.style.borderColor = '#1976d2';
+                currentBtn.style.fontWeight = '600';
+            }
+            
+            // 更新选中提示
+            const hintEl = document.getElementById('selected-item-hint');
+            if (hintEl) {
+                var typeText = type === 'mp' ? 'PP' : 'HP';
+                hintEl.innerHTML = '<span style="color: var(--color-primary);">✓</span> ' + itemName + ' <span style="color: ' + (type === 'mp' ? '#1976d2' : '#e53935') + ';">+' + value + typeText + '</span>';
             }
             
             var typeText = type === 'mp' ? 'PP' : 'HP';

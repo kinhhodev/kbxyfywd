@@ -1,12 +1,21 @@
 # AGENTS.md - 卡布西游微端项目指南
 
-> **文档更新日期**: 2026年3月16日
+> **文档更新日期**: 2026年3月20日
+
+## 最新活动资源下载
+
+**每周活动XML**:
+```
+http://enter.wanwan4399.com/bin-debug/assets/weekly/weeklyactivity
+```
 
 ## 项目概述
 
 这是一个基于 **WebView2** 的 Windows 桌面应用程序，用于卡布西游游戏辅助工具（浮影微端）。
 
-**窗口标题**：`卡布西游浮影微端 V1.02`
+**窗口标题**：`卡布西游浮影微端 V1.03`
+
+**GitHub 仓库**：https://github.com/lllcc666/kbxyfywd
 
 **技术栈**：
 | 组件 | 技术 |
@@ -19,6 +28,7 @@
 | Hook 框架 | MinHook |
 | 内存加载 | MemoryModule（DLL不落地） |
 | 压缩库 | zlib + minizip |
+| 版本控制 | Git |
 | 平台 | Windows x64 |
 
 ---
@@ -52,7 +62,7 @@
 │  ┌─────────────────────────────────────────────────────────────┤
 │  │              ResponseDispatcher (响应分发器)                │
 │  │         根据 Opcode+Params 分发到对应处理器                 │
-│  └─────────────────────────────────────────────────────────────┤
+│  └─────────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -65,7 +75,7 @@
 │  ┌─────────────────────────────────────────────────────────────┤
 │  │                    Opcode 命名空间                          │
 │  │              所有协议操作码的常量定义                        │
-│  └─────────────────────────────────────────────────────────────┤
+│  └─────────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -74,7 +84,7 @@
 │  ┌─────────────────────────────────────────────────────────────┤
 │  │                    PacketBuilder 类                         │
 │  │         链式调用构造封包，自动处理小端序编码                 │
-│  └─────────────────────────────────────────────────────────────┤
+│  └─────────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -182,6 +192,7 @@ ResponseDispatcher::Instance().Register(
 
 ```
 kbwebui/
+├── .gitignore               # Git 忽略配置
 ├── CMakeLists.txt           # CMake 构建配置
 ├── AGENTS.md                # 项目文档
 │
@@ -195,7 +206,9 @@ kbwebui/
 │
 ├── scripts/                 # Python 脚本工具
 │   ├── embed_dll.py         # DLL 转 C++ 头文件
-│   └── embed_html.py        # HTML 转 C++ 头文件
+│   ├── embed_html.py        # HTML 转 C++ 头文件
+│   ├── download_swf.py      # SWF 下载脚本
+│   ├── parse_weekly.py   # 周活动下载
 │
 ├── resources/               # 资源文件
 │   ├── app.ico              # 应用图标
@@ -205,7 +218,7 @@ kbwebui/
 ├── embedded/                # 嵌入数据头文件（自动生成）
 │   ├── webview2loader_data.h
 │   ├── zlib_data.h
-│   ├── minizip_data.h
+│   ├── minizip_helper.h
 │   ├── ui_html.h
 │   ├── minhook_data.h
 │   └── speed_x64_data.h
@@ -214,17 +227,22 @@ kbwebui/
 │   ├── sprite.xml           # 妖怪名称、系别
 │   ├── skill.xml            # 技能名称
 │   ├── tool.xml             # 道具名称
-│   └── map.xml              # 地图名称
-│
-├── src/                     # AS3反编译源码（游戏协议参考）
-│   └── com/game/locators/   # 协议定义 (MsgDoc.as, GameData.as)
-│
-├── swf_cache/               # SWF缓存目录
-│   ├── decompiled/          # 反编译输出
-│   └── *.swf                # 下载的SWF文件
+│   ├── map.xml              # 地图名称
+│   ├── npc.xml              # NPC 数据
+│   ├── npcdialog.xml        # NPC 对话
+│   ├── npctransform.xml     # NPC 变换
+│   ├── bufInfo.xml          # Buff 信息
+│   ├── dailytask.xml        # 日常任务
+│   ├── errorInfo.xml        # 错误信息
+│   ├── monsternature.xml    # 妖怪性格
+│   ├── siteBuff.xml         # 场景 Buff
+│   ├── siteBuff_desc.xml    # 场景 Buff 描述
+│   └── taskinfo.xml         # 任务信息
 │
 └── build_new/               # 构建输出目录
 ```
+
+> **注意**: `src/`（AS3反编译源码）和 `swf_cache/`（SWF缓存）已通过 .gitignore 排除，不会上传到 Git 仓库。
 
 ---
 
@@ -252,6 +270,35 @@ cmake --build . --config Release
 ```powershell
 .\build_new\bin\Release\WebView2Demo.exe
 ```
+
+---
+
+## Git 版本控制
+
+### 日常开发流程
+
+```powershell
+# 查看当前状态
+git status
+
+# 添加修改的文件
+git add .
+
+# 提交更改
+git commit -m "描述本次修改内容"
+
+# 推送到 GitHub
+git push
+```
+
+### 常用命令速查
+
+| 操作 | 命令 |
+|------|------|
+| 查看状态 | `git status` |
+| 查看修改内容 | `git diff` |
+| 查看提交历史 | `git log --oneline` |
+| 拉取远程更新 | `git pull` |
 
 ---
 
@@ -296,7 +343,7 @@ cmake --build . --config Release
 **A**: 使用小端序计算：`opcode = byte[0] | (byte[1] << 8) | (byte[2] << 16) | (byte[3] << 24)`
 
 ### Q: 版本号一致但仍弹出更新对话框
-**A**: 确保 `demo.cpp` 中的 `CURRENT_VERSION` 与服务器版本号精度一致（如 `1.02f`）
+**A**: 确保 `demo.cpp` 中的 `CURRENT_VERSION` 与服务器版本号精度一致（如 `1.03f`）
 
 ---
 

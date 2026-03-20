@@ -7,7 +7,6 @@ import os
 # 可能的文件URL列表
 URLS = [
     "http://enter.wanwan4399.com/bin-debug/assets/weekly/weeklyactivity",
-    "http://enter.wanwan4399.com/bin-debug/assets/weekly/weeklyactivity_new",
 ]
 
 def try_download(url):

@@ -318,23 +318,6 @@ struct ActivityState {
 };
 
 /**
- * @struct Act643State
- * @brief 屠苏祝百寿活动状态
- */
-struct Act643State : ActivityState {
-    std::atomic<int> msgCount{0};               // 消息计数
-    std::atomic<int> bestScore{0};              // 最高分
-    std::atomic<bool> useSweep{false};          // 是否使用扫荡
-    
-    void Reset() override {
-        ActivityState::Reset();
-        msgCount = 0;
-        bestScore = 0;
-        useSweep = false;
-    }
-};
-
-/**
  * @struct StrawberryState
  * @brief 采摘红莓果活动状态
  */
@@ -373,29 +356,6 @@ struct TrialState : ActivityState {
         awardNum = 0;
         complete = false;
         waitingResponse = false;
-    }
-};
-
-/**
- * @struct Act768State
- * @brief 宝盆纳万财活动状态
- */
-struct Act768State : ActivityState {
-    std::atomic<int> bestScore{0};              // 最高分
-    std::atomic<bool> useSweep{false};          // 是否使用扫荡
-    std::atomic<int> award1{0};                 // 奖励类型1
-    std::atomic<int> award2{0};                 // 奖励类型2
-    std::vector<int> awardArr;                  // 奖励物品列表
-    std::atomic<bool> sweepSuccess{false};      // 扫荡是否成功
-    
-    void Reset() override {
-        ActivityState::Reset();
-        bestScore = 0;
-        useSweep = false;
-        award1 = 0;
-        award2 = 0;
-        awardArr.clear();
-        sweepSuccess = false;
     }
 };
 
@@ -440,6 +400,31 @@ struct Act793State : ActivityState {
 };
 
 /**
+ * @struct Act791State
+ * @brief 五行镜破封印活动状态
+ */
+struct Act791State : ActivityState {
+    std::atomic<int> medalNum{0};               // 勋章数量
+    std::atomic<int> bestScore{0};              // 最高分
+    std::atomic<int> lastScore{0};              // 上次分数
+    std::atomic<int> superEvolutionFlag{0};     // 超进化标志
+    std::atomic<int> targetScore{0};            // 目标分数
+    std::atomic<bool> useSweep{false};          // 是否使用扫荡
+    std::atomic<bool> sweepSuccess{false};      // 扫荡是否成功
+    
+    void Reset() override {
+        ActivityState::Reset();
+        medalNum = 0;
+        bestScore = 0;
+        lastScore = 0;
+        superEvolutionFlag = 0;
+        targetScore = 0;
+        useSweep = false;
+        sweepSuccess = false;
+    }
+};
+
+/**
  * @class ActivityStateManager
  * @brief 活动状态管理器 - 统一管理所有活动状态
  * 
@@ -458,11 +443,6 @@ public:
     static ActivityStateManager& Instance();
     
     /**
-     * @brief 获取屠苏祝百寿状态
-     */
-    Act643State& GetAct643State();
-    
-    /**
      * @brief 获取采摘红莓果状态
      */
     StrawberryState& GetStrawberryState();
@@ -471,11 +451,6 @@ public:
      * @brief 获取试炼活动状态
      */
     TrialState& GetTrialState();
-    
-    /**
-     * @brief 获取宝盆纳万财状态
-     */
-    Act768State& GetAct768State();
     
     /**
      * @brief 获取驱傩聚福寿状态
@@ -488,6 +463,11 @@ public:
     Act793State& GetAct793State();
     
     /**
+     * @brief 获取五行镜破封印状态
+     */
+    Act791State& GetAct791State();
+    
+    /**
      * @brief 重置所有活动状态
      */
     void ResetAll();
@@ -498,12 +478,11 @@ private:
     ActivityStateManager(const ActivityStateManager&) = delete;
     ActivityStateManager& operator=(const ActivityStateManager&) = delete;
     
-    Act643State m_act643State;
     StrawberryState m_strawberryState;
     TrialState m_trialState;
-    Act768State m_act768State;
     Act778State m_act778State;
     Act793State m_act793State;
+    Act791State m_act791State;
 };
 
 // ============================================================================
@@ -1282,145 +1261,6 @@ void ProcessStrawberryResponse(const GamePacket& packet);
 // 屠苏祝百寿功能 (Act643)
 // ============================================================================
 
-namespace Act643 {
-    // 活动ID
-    constexpr int ACTIVITY_ID = 643;
-    
-    // 最高分
-    constexpr int MAX_SCORE = 40;
-}
-
-/**
- * @brief 屠苏祝百寿 - 发送活动操作封包
- * @param operation 操作类型字符串
- * @param bodyValues Body值列表
- * @return 发送是否成功
- */
-BOOL SendAct643Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {});
-
-/**
- * @brief 屠苏祝百寿 - 获取游戏信息
- * @return 发送是否成功
- */
-BOOL SendAct643GameInfoPacket();
-
-/**
- * @brief 屠苏祝百寿 - 开始游戏
- * @return 发送是否成功
- */
-BOOL SendAct643StartGamePacket();
-
-/**
- * @brief 屠苏祝百寿 - 游戏过程中接住食物
- * @param opType 操作类型 (1=接住食物)
- * @return 发送是否成功
- */
-BOOL SendAct643GamingPacket(int opType);
-
-/**
- * @brief 屠苏祝百寿 - 结束游戏
- * @param isPass 是否通关
- * @return 发送是否成功
- */
-BOOL SendAct643EndGamePacket(int isPass);
-
-/**
- * @brief 屠苏祝百寿 - 扫荡信息
- * @return 发送是否成功
- */
-BOOL SendAct643SweepInfoPacket();
-
-/**
- * @brief 屠苏祝百寿 - 执行扫荡
- * @return 发送是否成功
- */
-BOOL SendAct643SweepPacket();
-
-/**
- * @brief 屠苏祝百寿 - 一键完成
- * @param useSweep 是否使用扫荡功能（需要勾选扫荡复选框）
- * @return 执行是否成功
- */
-BOOL SendOneKeyAct643Packet(bool useSweep = false);
-
-/**
- * @brief 处理屠苏祝百寿响应
- * @param packet 封包数据
- */
-void ProcessAct643Response(const GamePacket& packet);
-
-// ============================================================================
-// 宝盆纳万财功能 (Act768)
-// ============================================================================
-
-namespace Act768 {
-    // 活动ID
-    constexpr int ACTIVITY_ID = 768;
-    
-    // 最高分
-    constexpr int MAX_SCORE = 1500;
-}
-
-/**
- * @brief 宝盆纳万财 - 发送活动操作封包
- * @param operation 操作类型字符串
- * @param bodyValues Body值列表
- * @return 发送是否成功
- */
-BOOL SendAct768Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {});
-
-/**
- * @brief 宝盆纳万财 - 获取游戏信息
- * @return 发送是否成功
- */
-BOOL SendAct768GameInfoPacket();
-
-/**
- * @brief 宝盆纳万财 - 开始游戏
- * @return 发送是否成功
- */
-BOOL SendAct768StartGamePacket();
-
-/**
- * @brief 宝盆纳万财 - 发送游戏过程封包
- * @param type 类型 (0=空击, 1=奖励, 2=礼物)
- * @param index 奖励索引
- * @param awardId 奖励ID
- * @return 发送是否成功
- */
-BOOL SendAct768GameHitPacket(int type, int index, int awardId);
-
-/**
- * @brief 宝盆纳万财 - 结束游戏
- * @return 发送是否成功
- */
-BOOL SendAct768EndGamePacket();
-
-/**
- * @brief 宝盆纳万财 - 扫荡信息
- * @return 发送是否成功
- */
-BOOL SendAct768SweepInfoPacket();
-
-/**
- * @brief 宝盆纳万财 - 执行扫荡
- * @return 发送是否成功
- */
-BOOL SendAct768SweepPacket();
-
-/**
- * @brief 宝盆纳万财 - 一键完成
- * @param useSweep 是否使用扫荡功能（需要勾选扫荡复选框）
- * @return 执行是否成功
- */
-BOOL SendOneKeyAct768Packet(bool useSweep = false);
-
-/**
- * @brief 处理宝盆纳万财响应
- * @param packet 封包数据
- */
-void ProcessAct768Response(const GamePacket& packet);
-
 // ============================================================================
 // 驱傩聚福寿功能 (Act778)
 // ============================================================================
@@ -1572,6 +1412,80 @@ BOOL SendOneKeyAct793Packet(bool useSweep = false, int targetMedals = Act793::TA
  * @param packet 封包数据
  */
 void ProcessAct793Response(const GamePacket& packet);
+
+// ============================================================================
+// 五行镜破封印功能 (Act791)
+// ============================================================================
+
+namespace Act791 {
+    // 活动ID
+    constexpr int ACTIVITY_ID = 791;
+    
+    // 游戏时长（秒）
+    constexpr int GAME_DURATION = 60;
+    
+    // 目标分数（默认）
+    constexpr int TARGET_SCORE = 250;
+    
+    // 额外封包Opcode
+    constexpr uint32_t EXTRA_OPCODE = 1184812;
+    constexpr int EXTRA_PARAMS = 3;
+}
+
+/**
+ * @brief 五行镜破封印 - 发送活动操作封包
+ * @param operation 操作类型字符串（如 "game_info", "start_game", "end_game" 等）
+ * @param bodyValues Body值列表（可选）
+ * @return 发送是否成功
+ */
+BOOL SendAct791Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {});
+
+/**
+ * @brief 五行镜破封印 - 获取游戏信息
+ * @return 发送是否成功
+ */
+BOOL SendAct791GameInfoPacket();
+
+/**
+ * @brief 五行镜破封印 - 开始游戏
+ * @return 发送是否成功
+ */
+BOOL SendAct791StartGamePacket();
+
+/**
+ * @brief 五行镜破封印 - 结束游戏
+ * @param score 游戏分数
+ * @return 发送是否成功
+ * @note 校验码: userId % 1000 + serverCheckCode + score
+ * @note 需要先发送额外封包(Opcode=1184812, Params=3, Body=[3,4039001,0])
+ */
+BOOL SendAct791EndGamePacket(int score);
+
+/**
+ * @brief 五行镜破封印 - 扫荡信息
+ * @return 发送是否成功
+ */
+BOOL SendAct791SweepInfoPacket();
+
+/**
+ * @brief 五行镜破封印 - 执行扫荡
+ * @return 发送是否成功
+ */
+BOOL SendAct791SweepPacket();
+
+/**
+ * @brief 五行镜破封印 - 一键完成
+ * @param useSweep 是否使用扫荡功能
+ * @param targetScore 目标分数（默认100）
+ * @return 执行是否成功
+ */
+BOOL SendOneKeyAct791Packet(bool useSweep = false, int targetScore = Act791::TARGET_SCORE);
+
+/**
+ * @brief 处理五行镜破封印响应（在HookedRecv中调用）
+ * @param packet 封包数据
+ */
+void ProcessAct791Response(const GamePacket& packet);
 
 // ============================================================================
 // 福瑞宝箱功能 (HeavenFurui)

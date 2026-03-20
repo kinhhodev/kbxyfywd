@@ -81,7 +81,7 @@ void* g_realGetTickCount = nullptr;
 void* g_realQueryPerformanceCounter = nullptr;
 
 // 版本检查相关常量
-constexpr float CURRENT_VERSION = 1.03f;  // 当前版本：1.03
+constexpr float CURRENT_VERSION = 1.04f;  // 当前版本：1.04
 constexpr wchar_t VERSION_CHECK_URL[] = L"https://gitee.com/deepmoutains/kxby-release-detection/raw/master/data.txt";
 constexpr wchar_t UPDATE_DOWNLOAD_URL[] = L"https://wwbov.lanzout.com/b03ancytve";
 
@@ -1617,45 +1617,6 @@ public:
                                     wcscpy_s(pScript, script.length() + 1, script.c_str());
                                     PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript);
                                 }
-                            } else if (msg.find(L"one_key_act643") != std::wstring::npos) {
-                                // 一键屠苏祝百寿
-                                std::wstring sweepStr = get_json_value(L"sweep");
-                                while (!sweepStr.empty() && (sweepStr.front() == L' ' || sweepStr.front() == L'\t')) sweepStr.erase(0, 1);
-                                while (!sweepStr.empty() && (sweepStr.back() == L' ' || sweepStr.back() == L'\t')) sweepStr.pop_back();
-                                bool useSweep = (sweepStr == L"true");
-                                if (SendOneKeyAct643Packet(useSweep)) {
-                                    std::wstring script = useSweep 
-                                        ? L"if(window.updateHelperText) { window.updateHelperText('屠苏祝百寿已开始（扫荡模式），请查看辅助日志'); }"
-                                        : L"if(window.updateHelperText) { window.updateHelperText('屠苏祝百寿已开始（最高分模式），请查看辅助日志'); }";
-                                    wchar_t* pScript = new wchar_t[script.length() + 1];
-                                    wcscpy_s(pScript, script.length() + 1, script.c_str());
-                                    PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript);
-                                } else {
-                                    std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('屠苏祝百寿启动失败'); }";
-                                    wchar_t* pScript = new wchar_t[script.length() + 1];
-                                    wcscpy_s(pScript, script.length() + 1, script.c_str());
-                                    PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript);
-                                }
-                            } else if (msg.find(L"one_key_act768") != std::wstring::npos) {
-                                // 一键宝盆纳万财
-                                std::wstring sweepStr = get_json_value(L"sweep");
-                                // 去除前后空格
-                                while (!sweepStr.empty() && (sweepStr.front() == L' ' || sweepStr.front() == L'\t')) sweepStr.erase(0, 1);
-                                while (!sweepStr.empty() && (sweepStr.back() == L' ' || sweepStr.back() == L'\t')) sweepStr.pop_back();
-                                bool useSweep = (sweepStr == L"true");
-                                if (SendOneKeyAct768Packet(useSweep)) {
-                                    std::wstring script = useSweep 
-                                        ? L"if(window.updateHelperText) { window.updateHelperText('宝盆纳万财已开始（扫荡模式），请查看辅助日志'); }"
-                                        : L"if(window.updateHelperText) { window.updateHelperText('宝盆纳万财已开始（最高分模式），请查看辅助日志'); }";
-                                    wchar_t* pScript = new wchar_t[script.length() + 1];
-                                    wcscpy_s(pScript, script.length() + 1, script.c_str());
-                                    PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript);
-                                } else {
-                                    std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('宝盆纳万财启动失败'); }";
-                                    wchar_t* pScript = new wchar_t[script.length() + 1];
-                                    wcscpy_s(pScript, script.length() + 1, script.c_str());
-                                    PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript);
-                                }
                             } else if (msg.find(L"battlesix_auto_match") != std::wstring::npos) {
                                 // 万妖盛会 - 自动匹配（异步执行，避免卡顿）
                                 // 读取匹配次数
@@ -1810,6 +1771,39 @@ public:
                                     wchar_t* pScript793_err = new wchar_t[script.length() + 1];
                                     wcscpy_s(pScript793_err, script.length() + 1, script.c_str());
                                     PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript793_err);
+                                }
+                            } else if (msg.find(L"one_key_act791") != std::wstring::npos) {
+                                // 一键五行镜破封印
+                                std::wstring sweepStr = get_json_value(L"sweep");
+                                while (!sweepStr.empty() && (sweepStr.front() == L' ' || sweepStr.front() == L'\t')) sweepStr.erase(0, 1);
+                                while (!sweepStr.empty() && (sweepStr.back() == L' ' || sweepStr.back() == L'\t')) sweepStr.pop_back();
+                                bool useSweep = (sweepStr == L"true");
+                                
+                                // 获取目标分数参数
+                                std::wstring scoreStr = get_json_value(L"score");
+                                int targetScore = Act791::TARGET_SCORE;
+                                if (!scoreStr.empty()) {
+                                    try {
+                                        targetScore = std::stoi(scoreStr);
+                                        if (targetScore < 1) targetScore = Act791::TARGET_SCORE;
+                                        if (targetScore > 250) targetScore = 250;  // 最大分数限制
+                                    } catch (...) {
+                                        targetScore = Act791::TARGET_SCORE;
+                                    }
+                                }
+                                
+                                if (SendOneKeyAct791Packet(useSweep, targetScore)) {
+                                    std::wstring script = useSweep 
+                                        ? L"if(window.updateHelperText) { window.updateHelperText('五行镜破封印已开始（扫荡模式），请查看辅助日志'); }"
+                                        : L"if(window.updateHelperText) { window.updateHelperText('五行镜破封印已开始（游戏模式），请查看辅助日志'); }";
+                                    wchar_t* pScript791 = new wchar_t[script.length() + 1];
+                                    wcscpy_s(pScript791, script.length() + 1, script.c_str());
+                                    PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript791);
+                                } else {
+                                    std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('五行镜破封印启动失败'); }";
+                                    wchar_t* pScript791_err = new wchar_t[script.length() + 1];
+                                    wcscpy_s(pScript791_err, script.length() + 1, script.c_str());
+                                    PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript791_err);
                                 }
                             } else if (msg.find(L"start_heaven_furui") != std::wstring::npos) {
                                 // 开始福瑞宝箱
@@ -2112,7 +2106,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_hWnd = CreateWindowExW(
         0,  // 普通窗口样式
         CLASS_NAME,
-        L"卡布西游浮影微端 V1.03",
+        L"卡布西游浮影微端 V1.04",
         WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 976, 813,  // 窗口宽度976，高度813
         nullptr,
