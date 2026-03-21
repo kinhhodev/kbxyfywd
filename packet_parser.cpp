@@ -138,6 +138,22 @@ static std::vector<std::pair<int, std::wstring>> ParseXmlBlocks(
     return results;
 }
 
+static void TrimTrailingWhitespace(std::wstring& text) {
+    while (!text.empty() && (text.back() == L' ' || text.back() == L'\t' ||
+           text.back() == L'\n' || text.back() == L'\r')) {
+        text.pop_back();
+    }
+}
+
+static bool TryParseInt(const std::string& text, int& value) {
+    try {
+        value = std::stoi(text);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 // ============================================================================
 // 妖怪背包数据全局变量（用于副本跳层等功能）
 // ============================================================================
@@ -274,14 +290,18 @@ static void ParseSpriteXml(const std::string& xml) {
     static const std::regex nameRe(R"(<name>\s*([^<]+?)\s*</name>)", std::regex_constants::icase);
     static const std::regex elemRe(R"(<elem>\s*(\d+)\s*</elem>)", std::regex_constants::icase);
     
-    // 清空BOSS列表（重新解析时）
-    g_bossList.clear();
+    std::vector<BossInfo> bossList;
+    std::vector<std::pair<int, std::wstring>> petNames;
+    std::vector<std::pair<int, int>> petElems;
     
     auto blockBegin = std::sregex_iterator(xml.begin(), xml.end(), spriteBlockRe);
     auto blockEnd = std::sregex_iterator();
     
     for (auto it = blockBegin; it != blockEnd; ++it) {
-        int id = std::stoi(it->str(1));
+        int id = 0;
+        if (!TryParseInt(it->str(1), id)) {
+            continue;
+        }
         std::string content = it->str(2);
         
         // 从sprite块内容中提取name
@@ -289,32 +309,32 @@ static void ParseSpriteXml(const std::string& xml) {
         std::smatch nameMatch;
         if (std::regex_search(content, nameMatch, nameRe)) {
             name = Utf8ToWide(nameMatch.str(1));
-            // trim trailing whitespace
-            while (!name.empty() && (name.back() == L' ' || name.back() == L'\t' || name.back() == L'\n' || name.back() == L'\r')) {
-                name.pop_back();
-            }
-            std::lock_guard<std::mutex> lock(g_dataMapsMutex);
-            g_petNames[id] = name;
+            TrimTrailingWhitespace(name);
+            petNames.emplace_back(id, name);
         }
         
         // 从sprite块内容中提取elem（系别ID）
         int elemId = 0;
         std::smatch elemMatch;
         if (std::regex_search(content, elemMatch, elemRe)) {
-            elemId = std::stoi(elemMatch.str(1));
-            std::lock_guard<std::mutex> lock(g_dataMapsMutex);
-            g_petElems[id] = elemId;
+            TryParseInt(elemMatch.str(1), elemId);
+            petElems.emplace_back(id, elemId);
         }
         
         // ID大于10000的是BOSS，添加到BOSS列表
         if (id > 10000 && !name.empty()) {
-            BossInfo boss;
-            boss.id = id;
-            boss.name = name;
-            boss.elem = elemId;
-            g_bossList.push_back(boss);
+            bossList.push_back({id, name, elemId});
         }
     }
+
+    std::lock_guard<std::mutex> lock(g_dataMapsMutex);
+    for (const auto& [petId, petName] : petNames) {
+        g_petNames[petId] = petName;
+    }
+    for (const auto& [petId, elemId] : petElems) {
+        g_petElems[petId] = elemId;
+    }
+    g_bossList = std::move(bossList);
 }
 
 static void ParseSkillXml(const std::string& xml) {
@@ -322,20 +342,35 @@ static void ParseSkillXml(const std::string& xml) {
     static const std::regex skillRe(R"(<skill>\s*<idx>\s*(\d+)\s*</idx>\s*<name>\s*([^<]+?)\s*</name>[\s\S]*?<power>\s*(\d+)\s*</power>[\s\S]*?</skill>)", std::regex_constants::icase);
     auto begin = std::sregex_iterator(xml.begin(), xml.end(), skillRe);
     auto end = std::sregex_iterator();
+
+    std::vector<std::pair<int, std::wstring>> skillNames;
+    std::vector<std::pair<int, int>> skillPowers;
+
     for (auto it = begin; it != end; ++it) {
-        int id = std::stoi(it->str(1));
+        int id = 0;
+        if (!TryParseInt(it->str(1), id)) {
+            continue;
+        }
         if (id == 0) continue;
         
         // 解析名称
         std::wstring name = Utf8ToWide(it->str(2));
-        while (!name.empty() && (name.back() == L' ' || name.back() == L'\t' || name.back() == L'\n' || name.back() == L'\r')) {
-            name.pop_back();
+        TrimTrailingWhitespace(name);
+        int power = 0;
+        if (!TryParseInt(it->str(3), power)) {
+            continue;
         }
-        int power = std::stoi(it->str(3));
-        
-        std::lock_guard<std::mutex> lock(g_dataMapsMutex);
-        g_skillNames[id] = name;
-        g_skillPowers[id] = power;
+
+        skillNames.emplace_back(id, name);
+        skillPowers.emplace_back(id, power);
+    }
+
+    std::lock_guard<std::mutex> lock(g_dataMapsMutex);
+    for (const auto& [skillId, skillName] : skillNames) {
+        g_skillNames[skillId] = skillName;
+    }
+    for (const auto& [skillId, power] : skillPowers) {
+        g_skillPowers[skillId] = power;
     }
 }
 
@@ -350,7 +385,7 @@ static void ParseMapXml(const std::string& xml) {
         std::smatch m1, m2;
         if (std::regex_search(tag, m1, idRe) && std::regex_search(tag, m2, nameRe)) {
             int id = 0;
-            try { id = std::stoi(m1.str(1)); } catch (...) { continue; }
+            if (!TryParseInt(m1.str(1), id)) continue;
             std::wstring name = Utf8ToWide(m2.str(1));
             std::lock_guard<std::mutex> lock(g_dataMapsMutex);
             g_mapNames[id] = name;
@@ -363,7 +398,8 @@ static void ParseToolXml(const std::string& xml) {
     auto begin = std::sregex_iterator(xml.begin(), xml.end(), re);
     auto end = std::sregex_iterator();
     for (auto it = begin; it != end; ++it) {
-        int id = std::stoi(it->str(1));
+        int id = 0;
+        if (!TryParseInt(it->str(1), id)) continue;
         std::wstring name = Utf8ToWide(it->str(2));
         std::lock_guard<std::mutex> lock(g_dataMapsMutex);
         g_toolNames[id] = name;
@@ -386,7 +422,8 @@ static void ParseBufInfoXml(const std::string& xml) {
     g_bufDescs.clear();
     
     for (auto it = begin; it != end; ++it) {
-        int id = std::stoi(it->str(1));
+        int id = 0;
+        if (!TryParseInt(it->str(1), id)) continue;
         std::string content = it->str(2);
         
         // 提取 name
@@ -514,7 +551,7 @@ static void ParseIdNameLines(const std::string& txt, std::unordered_map<int, std
         size_t plus = line.find('+');
         if (plus == std::string::npos) continue;
         int id = 0;
-        try { id = std::stoi(line.substr(0, plus)); } catch (...) { continue; }
+        if (!TryParseInt(line.substr(0, plus), id)) continue;
         std::wstring name = Utf8ToWide(line.substr(plus + 1));
         outMap[id] = name;
     }

@@ -1460,6 +1460,23 @@
                             </div>
                         </div>
                         
+                        <!-- 分隔线 -->
+                        <div style="width: 1px; background: var(--color-border);"></div>
+                        
+                        <!-- 坐骑大赛模块 (Act665) -->
+                        <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 140px;">
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">坐骑大赛</div>
+                            <div style="font-size: 8px; color: var(--color-text-tertiary);">多人竞速小游戏 每日50点上限</div>
+                            <select id="horse-competition-mount" style="font-size: 9px; padding: 2px 4px; border: 1px solid var(--color-border); border-radius: 2px;">
+                                <option value="own">使用自带坐骑</option>
+                                <option value="temp">使用临时坐骑</option>
+                            </select>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">状态: <span id="horse-competition-status" style="color: var(--color-text-tertiary);">就绪</span></div>
+                            <div style="display: flex; gap: 4px;">
+                                <button id="one-key-horse-competition" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">一键完成</button>
+                            </div>
+                        </div>
+                        
                     </div>
                     <!-- 状态提示 -->
                     <div id="daily-task-status" style="font-size: 9px; color: var(--color-text-secondary); padding: 2px 4px; background: var(--color-background-secondary); border-radius: 2px; text-align: center; margin: 4px;">
@@ -2835,6 +2852,26 @@
             document.getElementById('stop-heaven-furui').disabled = true;
         };
 
+        // 坐骑大赛 - 一键完成
+        window.oneKeyHorseCompetition = function() {
+            var mountSelect = document.getElementById('horse-competition-mount');
+            var mountType = mountSelect ? mountSelect.value : 'own';
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(JSON.stringify({ 
+                    action: 'one_key_horse_competition',
+                    mountType: mountType
+                }));
+            }
+        };
+
+        // 坐骑大赛 - 更新状态（C++调用）
+        window.updateHorseCompetitionStatus = function(status) {
+            var statusEl = document.getElementById('horse-competition-status');
+            if (statusEl) {
+                statusEl.textContent = status;
+            }
+        };
+
         // 跳舞大赛 - 计数器
         window.danceGameData = {
             completedCount: 0,  // 已完成次数
@@ -3127,6 +3164,10 @@
             var stopHeavenFuruiBtn = document.getElementById('stop-heaven-furui');
             if (stopHeavenFuruiBtn) {
                 stopHeavenFuruiBtn.addEventListener('click', window.stopHeavenFurui);
+            }
+            var horseCompetitionBtn = document.getElementById('one-key-horse-competition');
+            if (horseCompetitionBtn) {
+                horseCompetitionBtn.addEventListener('click', window.oneKeyHorseCompetition);
             }
         });
 

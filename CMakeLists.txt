@@ -125,6 +125,8 @@ if(MSVC)
         /OPT:ICF           # 合并相同代码
         /MERGE:.rdata=.text  # 合并只读数据段到代码段
         /MERGE:.pdata=.text  # 合并异常处理数据
+        /DEBUG:NONE        # 禁用调试信息，减少体积
+        /INCREMENTAL:NO   # 禁用增量链接，减少体积
     )
     
     # 使用动态 CRT（兼容 vcpkg 库）

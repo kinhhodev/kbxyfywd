@@ -325,6 +325,22 @@ constexpr uint32_t STRAWBERRY_SEND = 1185429;
 constexpr uint32_t STRAWBERRY_BACK = 1316501;
 
 // -------------------------
+// 坐骑大赛相关 (Act665)
+// -------------------------
+
+/** 坐骑大赛 - 活动命令发送 (Opcode=1185429, Params=665) */
+constexpr uint32_t HORSE_COMPETITION_SEND = 1185429;
+
+/** 坐骑大赛 - 活动命令响应 (Opcode=1316501, Params=665) */
+constexpr uint32_t HORSE_COMPETITION_BACK = 1316501;
+
+/** 坐骑大赛 - 游戏内命令发送 (USE_ITEM等, Opcode=1185432) */
+constexpr uint32_t HORSE_GAME_CMD_SEND = 1185432;
+
+// 坐骑大赛活动ID（全局常量）
+constexpr int HORSE_COMPETITION_ACT_ID = 665;
+
+// -------------------------
 // 福瑞宝箱相关 (HeavenFurui)
 // -------------------------
 
@@ -406,6 +422,7 @@ constexpr uint32_t BATTLESIX_BATTLE_END_BACK = 1317125;
 constexpr uint32_t BATTLESIX_USER_OP_SEND = 1186050;
 
 }  // namespace Opcode
+
 // ============================================================================
 // 数据结构定义
 // ============================================================================

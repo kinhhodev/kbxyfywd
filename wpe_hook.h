@@ -424,6 +424,168 @@ struct Act791State : ActivityState {
     }
 };
 
+// ============================================================================
+// 坐骑大赛相关 (Act665)
+// ============================================================================
+
+/** 坐骑大赛房间状态 */
+enum HorseRoomStatus {
+    HORSE_ROOM_FREE = 0,       // 空闲/等待中
+    HORSE_ROOM_READY = 1,      // 准备就绪
+    HORSE_ROOM_GAMESTART = 2,  // 游戏开始
+    HORSE_ROOM_INGAME = 3,     // 游戏中
+    HORSE_ROOM_SETTLE = 4      // 结算中
+};
+
+/** 坐骑大赛道具类型 */
+enum HorseItemType {
+    HORSE_ITEM_MUEN = 1,       // 沐恩 - 全体恢复满体力
+    HORSE_ITEM_JIE = 2,        // 饥饿 - 全体体力降至0
+    HORSE_ITEM_HEILEI = 3,     // 黑雷 - 使前一名玩家摔倒
+    HORSE_ITEM_LIUJIAN = 4,    // 流箭 - 随机玩家减少300体力
+    HORSE_ITEM_HUOLIDOU = 5    // 活力豆 - 恢复自身300体力
+};
+
+/**
+ * @struct HorseMemberInfo
+ * @brief 坐骑大赛房间成员信息
+ */
+struct HorseMemberInfo {
+    int room_id = 0;
+    uint32_t player_id = 0;
+    std::wstring player_name;
+    int world_id = 0;
+    int status = 0;
+    int sex = 0;
+    int join_time = 0;
+    int settle_time = 0;
+    int distance = 0;
+    int cheat = 0;
+    int rank = 0;
+    int horse_id = 0;
+    int horse_Iid = 0;
+    int horse_base_Hp = 0;
+    int horse_base_speed = 0;
+    int horse_base_intimate = 0;
+    double cost_time = 0.0;
+    std::vector<int> flag;  // 回归奖励标志
+    
+    void Reset() {
+        room_id = 0;
+        player_id = 0;
+        player_name.clear();
+        world_id = 0;
+        status = 0;
+        sex = 0;
+        join_time = 0;
+        settle_time = 0;
+        distance = 0;
+        cheat = 0;
+        rank = 0;
+        horse_id = 0;
+        horse_Iid = 0;
+        horse_base_Hp = 0;
+        horse_base_speed = 0;
+        horse_base_intimate = 0;
+        cost_time = 0.0;
+        flag.clear();
+    }
+};
+
+/**
+ * @struct HorseCompetitionState
+ * @brief 坐骑大赛活动状态 (Act665)
+ */
+struct HorseCompetitionState : ActivityState {
+    // 游戏常量
+    static constexpr int ROUTE_DISTANCE = 1500;  // 终点距离
+    static constexpr int SYNC_INTERVAL = 60;     // 同步间隔(帧)
+    
+    // 状态标志
+    std::atomic<bool> inRoom{false};              // 是否在房间中
+    std::atomic<bool> isGaming{false};            // 是否在游戏中
+    std::atomic<bool> isFinished{false};          // 是否已完成
+    std::atomic<bool> isSettling{false};          // 是否正在结算（等待END_GAME）
+    std::atomic<bool> receivedEndGame{false};     // 是否已收到END_GAME命令
+    std::atomic<bool> localFinished{false};       // 本地是否已完成（距离=1500）
+    
+    // 玩家数据
+    std::atomic<int> cnt{0};                      // 骑乘点数
+    std::atomic<int> isRide{0};                   // 是否骑乘坐骑
+    std::atomic<int> day{0};                      // 天数
+    std::atomic<int> resDayPoint{0};              // 剩余每日点数
+    std::atomic<int> exchangeNum{0};              // 兑换数量
+    
+    // 房间数据
+    int roomId = 0;
+    std::atomic<int> roomStatus{HORSE_ROOM_FREE};
+    double updateTime = 0.0;
+    double startTime = 0.0;
+    
+    // 成员列表
+    HorseMemberInfo myInfo;
+    std::vector<HorseMemberInfo> otherMembers;
+    
+    // 排名列表
+    std::vector<std::pair<uint32_t, int>> rankList;
+    
+    // 兑换限制列表
+    std::vector<std::pair<int, int>> exchangeLimits;
+    
+    // 游戏数据
+    double hp = 1000.0;
+    double maxHp = 1000.0;
+    double speed = 10.0;
+    double accSpeed = 15.0;
+    double distance = 0.0;
+    std::string state = "RUN";
+    std::string lastState = "RUN";
+    std::atomic<bool> canControl{true};
+    std::atomic<bool> isDie{false};
+    int syncCount = 0;
+    std::vector<int> items;  // 持有的道具
+    
+    // 设置
+    std::atomic<bool> useTempMount{true};         // 是否使用临时坐骑
+    std::atomic<bool> useItems{false};            // 是否使用道具
+    
+    void Reset() override {
+        ActivityState::Reset();
+        inRoom = false;
+        isGaming = false;
+        isFinished = false;
+        isSettling = false;
+        receivedEndGame = false;
+        localFinished = false;
+        cnt = 0;
+        isRide = 0;
+        day = 0;
+        resDayPoint = 0;
+        exchangeNum = 0;
+        roomId = 0;
+        useTempMount = true;
+        useItems = false;
+        roomStatus = HORSE_ROOM_FREE;
+        updateTime = 0.0;
+        startTime = 0.0;
+        myInfo.Reset();
+        otherMembers.clear();
+        rankList.clear();
+        exchangeLimits.clear();
+        hp = 1000.0;
+        maxHp = 1000.0;
+        speed = 10.0;
+        accSpeed = 15.0;
+        distance = 0.0;
+        state = "RUN";
+        lastState = "RUN";
+        canControl = true;
+        isDie = false;
+        syncCount = 0;
+        items.clear();
+    }
+};
+
 /**
  * @class ActivityStateManager
  * @brief 活动状态管理器 - 统一管理所有活动状态
@@ -468,6 +630,11 @@ public:
     Act791State& GetAct791State();
     
     /**
+     * @brief 获取坐骑大赛状态 (Act665)
+     */
+    HorseCompetitionState& GetHorseCompetitionState();
+    
+    /**
      * @brief 重置所有活动状态
      */
     void ResetAll();
@@ -483,6 +650,7 @@ private:
     Act778State m_act778State;
     Act793State m_act793State;
     Act791State m_act791State;
+    HorseCompetitionState m_horseCompetitionState;
 };
 
 // ============================================================================
@@ -3014,15 +3182,484 @@ uint32_t GetLastSpiritId();
 
 /**
 
+
+
  * @brief 获取妖怪威力最高的技能ID
+
+
 
  * @param spiritId 妖怪唯一ID
 
+
+
  * @return 最高威力技能ID，找不到返回0
+
+
 
  */
 
+
+
 uint32_t GetHighestPowerSkillId(uint32_t spiritId);
+
+
+
+
+
+
+
+// ============================================================================
+
+
+
+// 坐骑大赛功能 (Act665)
+
+
+
+// ============================================================================
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 发送坐骑大赛活动封包（通用）
+
+
+
+ * @param operation 操作命令字符串
+
+
+
+ * @param bodyValues Body值列表
+
+
+
+ * @param useGameCmd 是否使用游戏命令Opcode（USE_ITEM等需要）
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseCompetitionPacket(
+
+
+
+    const std::string& operation,
+
+
+
+    const std::vector<int32_t>& bodyValues = {},
+
+
+
+    bool useGameCmd = false
+
+
+
+);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 加入游戏
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseJoinGamePacket();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 获取房间信息
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseRoomInfoPacket();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 准备就绪
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseReadyPacket();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 退出房间
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseExitRoomPacket();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 获取UI信息
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseUIInfoPacket();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 获取兑换信息
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseExchangeInfoPacket();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 兑换奖励
+
+
+
+ * @param exchangeId 兑换ID
+
+
+
+ * @param count 兑换数量
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseExchangePacket(int exchangeId, int count);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 游戏进行中 - 发送进度
+
+
+
+ * @param distance 当前距离
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorsePlayGamePacket(int distance);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 使用道具
+
+
+
+ * @param itemIdx 道具索引 (1-5)
+
+
+
+ * @return 发送是否成功
+
+
+
+ * @note 使用不同的Opcode 1185432
+
+
+
+ */
+
+
+
+BOOL SendHorseUseItemPacket(int itemIdx);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 领取回归奖励
+
+
+
+ * @param idx 奖励索引
+
+
+
+ * @return 发送是否成功
+
+
+
+ */
+
+
+
+BOOL SendHorseGetRegressionPacket(int idx);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 一键完成坐骑大赛（完整流程）
+
+
+
+ * @param useItems 是否使用道具
+
+
+
+ * @return 执行是否成功
+
+
+
+ */
+
+
+
+/**
+ * @brief 一键坐骑大赛完整流程
+ * @param useTempMount 是否使用临时坐骑（false=自带坐骑）
+ * @return 执行是否成功
+ */
+BOOL SendOneKeyHorseCompetitionPacket(bool useTempMount = true);
+
+/**
+ * @brief 设置坐骑大赛进度回调函数
+ * @param callback 回调函数，参数为进度消息字符串
+ */
+void SetHorseProgressCallback(std::function<void(const std::wstring&)> callback);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 处理坐骑大赛响应（注册到ResponseDispatcher）
+
+
+
+ * @param packet 封包数据
+
+
+
+ */
+
+
+
+void ProcessHorseCompetitionResponse(const GamePacket& packet);
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 开始自动游戏
+
+
+
+ * @return 是否成功启动
+
+
+
+ */
+
+
+
+BOOL StartHorseCompetitionGame();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 停止自动游戏
+
+
+
+ */
+
+
+
+void StopHorseCompetitionGame();
+
+
+
+
+
+
+
+/**
+
+
+
+ * @brief 注册坐骑大赛响应处理器
+
+
+
+ */
+
+
+
+void RegisterHorseCompetitionHandlers();
 
 
 

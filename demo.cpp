@@ -85,19 +85,6 @@ constexpr float CURRENT_VERSION = 1.04f;  // 当前版本：1.04
 constexpr wchar_t VERSION_CHECK_URL[] = L"https://gitee.com/deepmoutains/kxby-release-detection/raw/master/data.txt";
 constexpr wchar_t UPDATE_DOWNLOAD_URL[] = L"https://wwbov.lanzout.com/b03ancytve";
 
-// 内存加载文件助手函数 (Release 模式下不再需要)
-#ifdef _DEBUG
-std::vector<BYTE> ReadFileToBuffer(const std::wstring& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) return {};
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::vector<BYTE> buffer(size);
-    if (file.read((char*)buffer.data(), size)) return buffer;
-    return {};
-}
-#endif
-
 // MinHook库函数指针类型定义
 typedef MH_STATUS(WINAPI* PFN_MH_INITIALIZE)(void);
 typedef MH_STATUS(WINAPI* PFN_MH_UNINITIALIZE)(void);
@@ -286,19 +273,15 @@ bool GetProgramAudioSession(IAudioSessionControl** ppSessionControl) {
     return false;
 }
 
-// 安全地发送JS脚本到UI线程（自动管理内存）
+// 安全地发送JS脚本到UI线程（统一使用 UI 桥接器）
 bool PostScriptToUI(const std::wstring& jsCode) {
-    if (jsCode.empty() || !g_hWnd) return false;
-    
-    wchar_t* pScript = new(std::nothrow) wchar_t[jsCode.length() + 1];
-    if (!pScript) return false;
-    
-    wcscpy_s(pScript, jsCode.length() + 1, jsCode.c_str());
-    
-    if (!PostMessage(g_hWnd, WM_EXECUTE_JS, 0, (LPARAM)pScript)) {
-        delete[] pScript;
+    if (jsCode.empty()) return false;
+
+    if (!UIBridge::Instance().IsInitialized()) {
         return false;
     }
+
+    UIBridge::Instance().ExecuteJS(jsCode);
     return true;
 }
 
@@ -454,22 +437,6 @@ VersionInfo ParseVersionInfo(const std::wstring& content) {
     return info;
 }
 
-// JSON 字符串转义辅助函数
-std::wstring EscapeJsonString(const std::wstring& input) {
-    std::wstring result;
-    for (wchar_t c : input) {
-        switch (c) {
-            case L'"': result += L"\\\""; break;
-            case L'\\': result += L"\\\\"; break;
-            case L'\n': result += L"\\n"; break;
-            case L'\r': result += L"\\r"; break;
-            case L'\t': result += L"\\t"; break;
-            default: result += c; break;
-        }
-    }
-    return result;
-}
-
 // 异步检查版本更新
 void CheckForUpdatesAsync() {
     std::thread([]() {
@@ -562,8 +529,8 @@ void CheckForUpdatesAsync() {
                 std::wstringstream jsScript;
                 jsScript << L"if(window.showUpdateDialog) { window.showUpdateDialog({";
                 jsScript << L"version: " << versionInfo.latestVersion << L",";
-                jsScript << L"announcement: \"" << EscapeJsonString(versionInfo.announcement) << L"\",";
-                jsScript << L"updateContent: \"" << EscapeJsonString(versionInfo.updateContent) << L"\",";
+                jsScript << L"announcement: \"" << UIBridge::EscapeJsonString(versionInfo.announcement) << L"\",";
+                jsScript << L"updateContent: \"" << UIBridge::EscapeJsonString(versionInfo.updateContent) << L"\",";
                 jsScript << L"downloadUrl: \"" << UPDATE_DOWNLOAD_URL << L"\"";
                 jsScript << L"}); }";
 
@@ -1793,6 +1760,26 @@ public:
                                     std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('五行镜破封印启动失败'); }";
                                     PostScriptToUI(script);
                                 }
+                            } else if (msg.find(L"one_key_horse_competition") != std::wstring::npos) {
+                                // 一键坐骑大赛 - 异步执行，不阻塞主线程
+                                std::wstring mountTypeStr = get_json_value(L"mountType");
+                                bool useTempMount = (mountTypeStr == L"temp");
+                                
+                                // 立即返回提示
+                                std::wstring mountText = useTempMount ? L"临时坐骑" : L"自带坐骑";
+                                std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('坐骑大赛已开始（" + mountText + L"），请等待...'); }";
+                                PostScriptToUI(script);
+                                
+                                // 注册进度回调
+                                SetHorseProgressCallback([](const std::wstring& msg) {
+                                    std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('坐骑大赛：" + msg + L"'); }";
+                                    PostScriptToUI(script);
+                                });
+                                
+                                // 异步执行
+                                std::thread([useTempMount]() {
+                                    SendOneKeyHorseCompetitionPacket(useTempMount);
+                                }).detach();
                             } else if (msg.find(L"start_heaven_furui") != std::wstring::npos) {
                                 // 开始福瑞宝箱
                                 std::wstring maxBoxesStr = get_json_value(L"maxBoxes");
@@ -2089,6 +2076,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // 初始化WPE Hook模块
     InitializeWpeHook();
+    
+    // 注册坐骑大赛响应处理器
+    RegisterHorseCompetitionHandlers();
     
     // 初始化 UIBridge
     UIBridge::Instance().Initialize(g_hWnd);

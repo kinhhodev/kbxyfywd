@@ -50,8 +50,8 @@ PacketBuilder& PacketBuilder::SetParams(uint32_t params) {
 PacketBuilder& PacketBuilder::WriteString(const std::string& str) {
     // 写入字符串长度（小端序，2字节）
     uint16_t len = static_cast<uint16_t>(str.length());
-    m_body.push_back(static_cast<uint8_t>(len & 0xFF));
-    m_body.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
+    m_body.push_back(static_cast<uint8_t>(len & 0xFF));         // 低字节在前
+    m_body.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));  // 高字节在后
     
     // 写入字符串内容
     for (char c : str) {

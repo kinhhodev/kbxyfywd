@@ -66,7 +66,7 @@ void UIBridge::NotifyTaskComplete(const std::wstring& taskName, bool success, co
 
 void UIBridge::ShowDialog(const std::wstring& type, const std::wstring& message) {
     std::wstring script = L"if(window.showDialog) { window.showDialog('" + 
-                          EscapeJsonString(type) + L", '" + 
+                          EscapeJsonString(type) + L"', '" + 
                           EscapeJsonString(message) + L"'); }";
     ExecuteJS(script);
 }
@@ -88,22 +88,15 @@ void UIBridge::UpdateMuteButtonState(bool muted) {
 // ============================================================================
 
 void UIBridge::ExecuteJS(const std::wstring& script) {
-    if (script.empty()) return;
+    if (script.empty() || !m_hwnd) return;
 
-    // 分配内存并复制字符串
-    wchar_t* pScript = new (std::nothrow) wchar_t[script.length() + 1];
+    const size_t len = script.length() + 1;
+    wchar_t* pScript = new (std::nothrow) wchar_t[len];
     if (!pScript) return;
 
-    wcscpy_s(pScript, script.length() + 1, script.c_str());
+    wmemcpy_s(pScript, len, script.c_str(), len);
 
-    // 使用 PostMessage 异步执行（线程安全）
-    if (m_hwnd) {
-        if (!PostMessage(m_hwnd, WM_EXECUTE_JS, 0, (LPARAM)pScript)) {
-            // PostMessage 失败，释放内存
-            delete[] pScript;
-        }
-    } else {
-        // 窗口句柄未初始化，释放内存
+    if (!PostMessage(m_hwnd, WM_EXECUTE_JS, 0, (LPARAM)pScript)) {
         delete[] pScript;
     }
 }
