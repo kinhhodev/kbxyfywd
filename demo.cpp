@@ -1,10 +1,9 @@
 #include <windows.h>
 #include <dwmapi.h>
+#include <cstdlib>
 #include <string>
 #include <vector>
-#include <sstream>
 #include <fstream>
-#include <iomanip>
 #include <WebView2.h>
 #include <MinHook.h>
 #include <MemoryModule.h>
@@ -18,7 +17,6 @@
 #include <commdlg.h>
 #include <winhttp.h>
 #include <thread>
-#include <regex>
 
 // 包含嵌入的WebView2Loader.dll数据
 #include "embedded/webview2loader_data.h"                                 
@@ -372,16 +370,78 @@ struct VersionInfo {
     std::wstring updateContent;
 };
 
+namespace {
+
+std::wstring TrimWhitespace(const std::wstring& value) {
+    const size_t start = value.find_first_not_of(L" \t\r\n");
+    if (start == std::wstring::npos) {
+        return L"";
+    }
+
+    const size_t end = value.find_last_not_of(L" \t\r\n");
+    return value.substr(start, end - start + 1);
+}
+
+bool TryParseIntInRange(const std::wstring& text, int minValue, int maxValue, int defaultValue, int& value) {
+    const std::wstring trimmed = TrimWhitespace(text);
+    if (trimmed.empty()) {
+        value = defaultValue;
+        return false;
+    }
+
+    wchar_t* end = nullptr;
+    long parsed = std::wcstol(trimmed.c_str(), &end, 10);
+    if (end == trimmed.c_str() || *end != L'\0') {
+        value = defaultValue;
+        return false;
+    }
+
+    if (parsed < minValue) {
+        value = minValue;
+    } else if (parsed > maxValue) {
+        value = maxValue;
+    } else {
+        value = static_cast<int>(parsed);
+    }
+    return true;
+}
+
+bool TryParseFloatValue(const std::wstring& text, float& value) {
+    const std::wstring trimmed = TrimWhitespace(text);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    wchar_t* end = nullptr;
+    float parsed = static_cast<float>(std::wcstod(trimmed.c_str(), &end));
+    if (end == trimmed.c_str() || *end != L'\0') {
+        return false;
+    }
+
+    value = parsed;
+    return true;
+}
+
+}  // anonymous namespace
+
 // 从文本内容中解析版本信息（Gitee data.txt 格式）
 VersionInfo ParseVersionInfo(const std::wstring& content) {
     VersionInfo info = {CURRENT_VERSION, L"", L""};
 
-    // 按行解析，更可靠
-    std::wistringstream stream(content);
-    std::wstring line;
     std::wstring currentSection;
-    
-    while (std::getline(stream, line)) {
+    size_t lineStart = 0;
+
+    while (lineStart <= content.length()) {
+        size_t lineEnd = content.find(L'\n', lineStart);
+        std::wstring line;
+        if (lineEnd == std::wstring::npos) {
+            line = content.substr(lineStart);
+            lineStart = content.length() + 1;
+        } else {
+            line = content.substr(lineStart, lineEnd - lineStart);
+            lineStart = lineEnd + 1;
+        }
+
         // 去除行尾的\r（Windows换行符问题）
         if (!line.empty() && line.back() == L'\r') {
             line.pop_back();
@@ -394,10 +454,8 @@ VersionInfo ParseVersionInfo(const std::wstring& content) {
             if (pos != std::wstring::npos) {
                 std::wstring versionStr = line.substr(pos + 1);
                 // 去除空白
-                versionStr = std::regex_replace(versionStr, std::wregex(LR"(^\s+|\s+$)"), L"");
-                try {
-                    info.latestVersion = std::stof(versionStr);
-                } catch (...) {
+                versionStr = TrimWhitespace(versionStr);
+                if (!TryParseFloatValue(versionStr, info.latestVersion)) {
                     info.latestVersion = CURRENT_VERSION;
                 }
             }
@@ -409,7 +467,7 @@ VersionInfo ParseVersionInfo(const std::wstring& content) {
             if (pos == std::wstring::npos) pos = line.find(L":");
             if (pos != std::wstring::npos && pos + 1 < line.length()) {
                 info.announcement = line.substr(pos + 1);
-                info.announcement = std::regex_replace(info.announcement, std::wregex(LR"(^\s+|\s+$)"), L"");
+                info.announcement = TrimWhitespace(info.announcement);
             }
         } else if (line.find(L"更新内容") == 0) {
             currentSection = L"updateContent";
@@ -526,15 +584,13 @@ void CheckForUpdatesAsync() {
             constexpr float VERSION_EPSILON = 0.001f;
             if (versionInfo.latestVersion > CURRENT_VERSION + VERSION_EPSILON) {
                 // 需要更新，构造 JavaScript 代码显示更新对话框
-                std::wstringstream jsScript;
-                jsScript << L"if(window.showUpdateDialog) { window.showUpdateDialog({";
-                jsScript << L"version: " << versionInfo.latestVersion << L",";
-                jsScript << L"announcement: \"" << UIBridge::EscapeJsonString(versionInfo.announcement) << L"\",";
-                jsScript << L"updateContent: \"" << UIBridge::EscapeJsonString(versionInfo.updateContent) << L"\",";
-                jsScript << L"downloadUrl: \"" << UPDATE_DOWNLOAD_URL << L"\"";
-                jsScript << L"}); }";
-
-                std::wstring script = jsScript.str();
+                std::wstring script =
+                    L"if(window.showUpdateDialog) { window.showUpdateDialog({"
+                    L"version: " + std::to_wstring(versionInfo.latestVersion) +
+                    L",announcement: \"" + UIBridge::EscapeJsonString(versionInfo.announcement) +
+                    L"\",updateContent: \"" + UIBridge::EscapeJsonString(versionInfo.updateContent) +
+                    L"\",downloadUrl: \"" + std::wstring(UPDATE_DOWNLOAD_URL) +
+                    L"\"}); }";
                 PostScriptToUI(script);
             }
             
@@ -1369,10 +1425,17 @@ public:
                                     size_t rbrack = msg.find(L"]", lbrack);
                                     if (lbrack != std::wstring::npos && rbrack != std::wstring::npos) {
                                         std::wstring arr = msg.substr(lbrack + 1, rbrack - lbrack - 1);
-                                        std::wistringstream ss(arr);
-                                        while (ss.good()) {
+                                        size_t itemStart = 0;
+                                        while (itemStart <= arr.length()) {
+                                            size_t itemEnd = arr.find(L',', itemStart);
                                             std::wstring num;
-                                            if (!std::getline(ss, num, L',')) break;
+                                            if (itemEnd == std::wstring::npos) {
+                                                num = arr.substr(itemStart);
+                                                itemStart = arr.length() + 1;
+                                            } else {
+                                                num = arr.substr(itemStart, itemEnd - itemStart);
+                                                itemStart = itemEnd + 1;
+                                            }
                                             // trim spaces
                                             size_t start = num.find_first_not_of(L" \t\r\n");
                                             size_t end = num.find_last_not_of(L" \t\r\n");
@@ -1605,13 +1668,7 @@ public:
                                 while (!matchCountStr.empty() && (matchCountStr.front() == L' ' || matchCountStr.front() == L'\t')) matchCountStr.erase(0, 1);
                                 while (!matchCountStr.empty() && (matchCountStr.back() == L' ' || matchCountStr.back() == L'\t')) matchCountStr.pop_back();
                                 int matchCount = 1;
-                                try {
-                                    matchCount = std::stoi(matchCountStr);
-                                    if (matchCount < 1) matchCount = 1;
-                                    if (matchCount > 999) matchCount = 999;
-                                } catch (...) {
-                                    matchCount = 1;
-                                }
+                                TryParseIntInRange(matchCountStr, 1, 999, 1, matchCount);
                                 
                                 wchar_t startMsg[128];
                                 swprintf_s(startMsg, L"万妖盛会：开始匹配（共%d次）...", matchCount);
@@ -1661,13 +1718,7 @@ public:
                                 while (!layerStr.empty() && (layerStr.front() == L' ' || layerStr.front() == L'\t')) layerStr.erase(0, 1);
                                 while (!layerStr.empty() && (layerStr.back() == L' ' || layerStr.back() == L'\t')) layerStr.pop_back();
                                 int targetLayer = 1;
-                                try {
-                                    targetLayer = std::stoi(layerStr);
-                                    if (targetLayer < 1) targetLayer = 1;
-                                    if (targetLayer > 9999) targetLayer = 9999;
-                                } catch (...) {
-                                    targetLayer = 1;
-                                }
+                                TryParseIntInRange(layerStr, 1, 9999, 1, targetLayer);
                                 
                                 // 更新UI状态
                                 std::wstring startScript = L"if(window.updateDungeonJumpStatus) { window.updateDungeonJumpStatus('副本跳层：准备跳转到第" + std::to_wstring(targetLayer) + L"层...'); }";
@@ -1713,13 +1764,7 @@ public:
                                 std::wstring medalsStr = get_json_value(L"medals");
                                 int targetMedals = Act793::TARGET_MEDALS;
                                 if (!medalsStr.empty()) {
-                                    try {
-                                        targetMedals = std::stoi(medalsStr);
-                                        if (targetMedals < 1) targetMedals = Act793::TARGET_MEDALS;
-                                        if (targetMedals > 100) targetMedals = 100;
-                                    } catch (...) {
-                                        targetMedals = Act793::TARGET_MEDALS;
-                                    }
+                                    TryParseIntInRange(medalsStr, 1, 100, Act793::TARGET_MEDALS, targetMedals);
                                 }
                                 
                                 if (SendOneKeyAct793Packet(useSweep, targetMedals)) {
@@ -1742,13 +1787,7 @@ public:
                                 std::wstring scoreStr = get_json_value(L"score");
                                 int targetScore = Act791::TARGET_SCORE;
                                 if (!scoreStr.empty()) {
-                                    try {
-                                        targetScore = std::stoi(scoreStr);
-                                        if (targetScore < 1) targetScore = Act791::TARGET_SCORE;
-                                        if (targetScore > 250) targetScore = 250;  // 最大分数限制
-                                    } catch (...) {
-                                        targetScore = Act791::TARGET_SCORE;
-                                    }
+                                    TryParseIntInRange(scoreStr, 1, 250, Act791::TARGET_SCORE, targetScore);
                                 }
                                 
                                 if (SendOneKeyAct791Packet(useSweep, targetScore)) {
@@ -1785,11 +1824,7 @@ public:
                                 std::wstring maxBoxesStr = get_json_value(L"maxBoxes");
                                 int maxBoxes = 30;
                                 if (!maxBoxesStr.empty()) {
-                                    try {
-                                        maxBoxes = std::stoi(maxBoxesStr);
-                                    } catch (...) {
-                                        maxBoxes = 30;
-                                    }
+                                    TryParseIntInRange(maxBoxesStr, 1, 9999, 30, maxBoxes);
                                 }
                                 if (SendOneKeyHeavenFuruiPacket(maxBoxes)) {
                                     std::wstring script = L"if(window.updateHelperText) { window.updateHelperText('福瑞宝箱：开始遍历地图查找宝箱...'); }";

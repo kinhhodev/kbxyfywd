@@ -8,10 +8,10 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <wincrypt.h>
+#include <cctype>
+#include <cstdlib>
 #include <string>
 #include <vector>
-#include <sstream>
-#include <iomanip>
 #include <memory>
 #include <tuple>
 #include <algorithm>
@@ -60,6 +60,76 @@ extern ICoreWebView2* g_webview;
 
 // 前向声明
 void ProcessMD5CheckAndReply(const std::vector<BYTE>& body, uint32_t params);
+
+struct ItemNameEntry {
+    uint32_t id;
+    const wchar_t* name;
+};
+
+struct ItemPriceEntry {
+    uint32_t id;
+    uint32_t price;
+};
+
+struct Md5FaceEntry {
+    const char* md5;
+    int face;
+};
+
+struct PacketLabelEntry {
+    uint32_t opcode;
+    const char* label;
+};
+
+constexpr char HEX_DIGITS[] = "0123456789abcdef";
+
+bool TryParseUInt32Decimal(const std::string& text, uint32_t& value) {
+    if (text.empty()) {
+        return false;
+    }
+
+    char* end = nullptr;
+    unsigned long parsed = std::strtoul(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+
+    value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+bool TryParseIntDecimal(const std::string& text, int& value) {
+    if (text.empty()) {
+        return false;
+    }
+
+    char* end = nullptr;
+    long parsed = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+bool TryParseHexBytePair(char high, char low, BYTE& value) {
+    auto hexValue = [](unsigned char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+
+    int hi = hexValue(static_cast<unsigned char>(high));
+    int lo = hexValue(static_cast<unsigned char>(low));
+    if (hi < 0 || lo < 0) {
+        return false;
+    }
+
+    value = static_cast<BYTE>((hi << 4) | lo);
+    return true;
+}
 
 // ============================================================================
 // 内部命名空间 - 封装实现细节
@@ -198,6 +268,25 @@ static int g_strawberryAwardType = 0;          // 奖励类型
 // -------------------------
 // 调试日志函数
 // -------------------------
+
+static bool ReadLengthPrefixedString(const std::vector<BYTE>& body, size_t& offset, std::string& value) {
+    if (offset + 2 > body.size()) return false;
+
+    const BYTE* data = body.data();
+    uint16_t len = static_cast<uint16_t>(data[offset] | (data[offset + 1] << 8));
+    offset += 2;
+    if (offset + len > body.size()) return false;
+
+    value.assign(reinterpret_cast<const char*>(data + offset), len);
+    offset += len;
+    return true;
+}
+
+static BOOL SendActivityPacket(uint32_t activityId, const std::string& operation, const std::vector<int32_t>& bodyValues = {}) {
+    std::vector<BYTE> packet = BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, activityId, operation, bodyValues);
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()),
+                      Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+}
 
 }  // anonymous namespace
 
@@ -701,7 +790,7 @@ BOOL SendUsePropsPacket(uint32_t itemId, uint32_t spiritId,
  * @return 道具名称
  */
 std::wstring GetItemName(uint32_t itemId) {
-    static const std::map<uint32_t, std::wstring> itemNames = {
+    static const ItemNameEntry itemNames[] = {
         {100005, L"蟠桃"},
         {100006, L"大金创药"},
         {100007, L"中金创药"},
@@ -713,12 +802,13 @@ std::wstring GetItemName(uint32_t itemId) {
         {100031, L"活血散"},
         {100034, L"天香丸"},
     };
-    
-    auto it = itemNames.find(itemId);
-    if (it != itemNames.end()) {
-        return it->second;
+
+    for (const auto& entry : itemNames) {
+        if (entry.id == itemId) {
+            return entry.name;
+        }
     }
-    
+
     return std::to_wstring(itemId);
 }
 
@@ -728,21 +818,22 @@ std::wstring GetItemName(uint32_t itemId) {
  * @return 道具价格
  */
 uint32_t GetItemPrice(uint32_t itemId) {
-    static const std::map<uint32_t, uint32_t> itemPrices = {
-        {100006, 120},   // 大金创药
-        {100007, 50},    // 中金创药
-        {100008, 20},    // 小金创药
-        {100010, 100},   // 小型法力药剂
-        {100011, 150},   // 中型法力药剂
-        {100012, 200},   // 大型法力药剂
-        {100031, 350},   // 活血散
+    static const ItemPriceEntry itemPrices[] = {
+        {100006, 120},
+        {100007, 50},
+        {100008, 20},
+        {100010, 100},
+        {100011, 150},
+        {100012, 200},
+        {100031, 350},
     };
-    
-    auto it = itemPrices.find(itemId);
-    if (it != itemPrices.end()) {
-        return it->second;
+
+    for (const auto& entry : itemPrices) {
+        if (entry.id == itemId) {
+            return entry.price;
+        }
     }
-    
+
     return 0;
 }
 
@@ -767,30 +858,24 @@ uint32_t GetItemPosition(uint32_t itemId) {
     // 兼容旧代码的静态变量映射到状态管理器
     static bool g_act793SweepSuccess = false;  // 仅用于sweep_success标志
     
-    static std::vector<BYTE> BuildAct793Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {}) {
-        return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act793::ACTIVITY_ID, operation, bodyValues);
-    }
-    
     BOOL SendAct793Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
-        std::vector<BYTE> packet = BuildAct793Packet(operation, bodyValues);
-        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()),
-                          Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+        return SendActivityPacket(Act793::ACTIVITY_ID, operation, bodyValues);
     }
     
     BOOL SendAct793GameInfoPacket() {
         ACT793_STATE.waitingResponse = true;
-        return SendAct793Packet("open_ui");
+        return SendAct793Packet("open_ui", {});
     }
     
     BOOL SendAct793StartGamePacket() {
         ACT793_STATE.waitingResponse = true;
-        return SendAct793Packet("start_game");
+        return SendAct793Packet("start_game", {});
     }
     
     BOOL SendAct793GameHitPacket(int hitCount) {
         // 封包格式: [game_hit, hitCount + 1000]
         // 注意：game_hit 服务器不返回响应，所以直接使用SendPacket不等待响应
-        std::vector<BYTE> packet = BuildAct793Packet("game_hit", {hitCount + 1000});
+        std::vector<BYTE> packet = BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act793::ACTIVITY_ID, "game_hit", {hitCount + 1000});
         return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
     }
     
@@ -805,12 +890,12 @@ uint32_t GetItemPosition(uint32_t itemId) {
     
     BOOL SendAct793SweepInfoPacket() {
         ACT793_STATE.waitingResponse = true;
-        return SendAct793Packet("sweep_info");
+        return SendAct793Packet("sweep_info", {});
     }
     
     BOOL SendAct793SweepPacket() {
         ACT793_STATE.waitingResponse = true;
-        return SendAct793Packet("sweep");
+        return SendAct793Packet("sweep", {});
     }
     
     DWORD WINAPI Act793ThreadProc(LPVOID lpParam) {
@@ -894,16 +979,10 @@ uint32_t GetItemPosition(uint32_t itemId) {
     }
     
     void ProcessAct793Response(const GamePacket& packet) {
-        if (packet.body.size() < 2) return;
-        const BYTE* body = packet.body.data();
         size_t offset = 0;
-        
-        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
-        offset += 2;
-        if (offset + strLen > packet.body.size()) return;
-        
-        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
-        offset += strLen;
+        std::string operation;
+        if (!ReadLengthPrefixedString(packet.body, offset, operation)) return;
+        const BYTE* body = packet.body.data();
         
         ACT793_STATE.waitingResponse = false;
         
@@ -968,35 +1047,24 @@ uint32_t GetItemPosition(uint32_t itemId) {
     
     static bool g_act791SweepSuccess = false;
     
-    static std::vector<BYTE> BuildAct791Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {}) {
-        return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act791::ACTIVITY_ID, operation, bodyValues);
-    }
-    
     BOOL SendAct791Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
-        std::vector<BYTE> packet = BuildAct791Packet(operation, bodyValues);
-        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()),
-                          Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+        return SendActivityPacket(Act791::ACTIVITY_ID, operation, bodyValues);
     }
     
     BOOL SendAct791GameInfoPacket() {
         ACT791_STATE.waitingResponse = true;
-        return SendAct791Packet("game_info");
+        return SendAct791Packet("game_info", {});
     }
     
     BOOL SendAct791StartGamePacket() {
         ACT791_STATE.waitingResponse = true;
-        return SendAct791Packet("start_game");
+        return SendAct791Packet("start_game", {});
     }
     
     BOOL SendAct791EndGamePacket(int score) {
         // 步骤1：先发送额外封包 (根据AS3代码: sendMessage(1184812, 3, [3, 4039001, 0]))
-        std::vector<BYTE> extraPacket = PacketBuilder()
-            .SetOpcode(Act791::EXTRA_OPCODE)
-            .SetParams(Act791::EXTRA_PARAMS)
-            .WriteInt32(3)
-            .WriteInt32(4039001)
-            .WriteInt32(0)
-            .Build();
+        std::vector<BYTE> extraPacket = PacketBuilder().SetOpcode(Act791::EXTRA_OPCODE).SetParams(Act791::EXTRA_PARAMS)
+            .WriteInt32(3).WriteInt32(4039001).WriteInt32(0).Build();
         SendPacket(0, extraPacket.data(), static_cast<DWORD>(extraPacket.size()));
         Sleep(100);
         
@@ -1008,12 +1076,12 @@ uint32_t GetItemPosition(uint32_t itemId) {
     
     BOOL SendAct791SweepInfoPacket() {
         ACT791_STATE.waitingResponse = true;
-        return SendAct791Packet("sweep_info");
+        return SendAct791Packet("sweep_info", {});
     }
     
     BOOL SendAct791SweepPacket() {
         ACT791_STATE.waitingResponse = true;
-        return SendAct791Packet("sweep");
+        return SendAct791Packet("sweep", {});
     }
     
     DWORD WINAPI Act791ThreadProc(LPVOID lpParam) {
@@ -1092,17 +1160,10 @@ uint32_t GetItemPosition(uint32_t itemId) {
     }
     
     void ProcessAct791Response(const GamePacket& packet) {
-        if (packet.body.size() < 2) return;
-        const BYTE* body = packet.body.data();
         size_t offset = 0;
-        
-        // 读取操作字符串
-        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
-        offset += 2;
-        if (offset + strLen > packet.body.size()) return;
-        
-        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
-        offset += strLen;
+        std::string operation;
+        if (!ReadLengthPrefixedString(packet.body, offset, operation)) return;
+        const BYTE* body = packet.body.data();
         
         ACT791_STATE.waitingResponse = false;
         
@@ -1174,24 +1235,18 @@ uint32_t GetItemPosition(uint32_t itemId) {
     // 兼容旧代码的静态变量映射到状态管理器
     static std::vector<std::pair<int, int>> g_act778AwardList;  // [index, type] 列表
     
-    static std::vector<BYTE> BuildAct778Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
-        return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, Act778::ACTIVITY_ID, operation, bodyValues);
-    }
-    
     BOOL SendAct778Packet(const std::string& operation, const std::vector<int32_t>& bodyValues) {
-        std::vector<BYTE> packet = BuildAct778Packet(operation, bodyValues);
-        return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), 
-                          Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+        return SendActivityPacket(Act778::ACTIVITY_ID, operation, bodyValues);
     }
     
     BOOL SendAct778GameInfoPacket() {
         ACT778_STATE.waitingResponse = true;
-        return SendAct778Packet("open_ui");
+        return SendAct778Packet("open_ui", {});
     }
     
     BOOL SendAct778StartGamePacket() {
         ACT778_STATE.waitingResponse = true;
-        return SendAct778Packet("start_game");
+        return SendAct778Packet("start_game", {});
     }
     
     BOOL SendAct778GameHitPacket(int below) {
@@ -1210,12 +1265,12 @@ uint32_t GetItemPosition(uint32_t itemId) {
     
     BOOL SendAct778SweepInfoPacket() {
         ACT778_STATE.waitingResponse = true;
-        return SendAct778Packet("sweep_info");
+        return SendAct778Packet("sweep_info", {});
     }
     
     BOOL SendAct778SweepPacket() {
         ACT778_STATE.waitingResponse = true;
-        return SendAct778Packet("sweep");
+        return SendAct778Packet("sweep", {});
     }
     
     // 扫荡是否成功的标志
@@ -1320,16 +1375,10 @@ uint32_t GetItemPosition(uint32_t itemId) {
     }
     
     void ProcessAct778Response(const GamePacket& packet) {
-        if (packet.body.size() < 2) return;
-        const BYTE* body = packet.body.data();
         size_t offset = 0;
-        
-        uint16_t strLen = body[offset] | (body[offset + 1] << 8);
-        offset += 2;
-        if (offset + strLen > packet.body.size()) return;
-        
-        std::string operation(reinterpret_cast<const char*>(body + offset), strLen);
-        offset += strLen;
+        std::string operation;
+        if (!ReadLengthPrefixedString(packet.body, offset, operation)) return;
+        const BYTE* body = packet.body.data();
         
         ACT778_STATE.waitingResponse = false;
         
@@ -1411,44 +1460,48 @@ void SetPacketCallback(PACKET_CALLBACK callback) {
 // ============================================================================
 
 std::string HexToString(const BYTE* pData, DWORD dwSize) {
-    std::stringstream ss;
+    if (dwSize == 0) {
+        return "";
+    }
+
+    std::string result;
+    result.reserve(static_cast<size_t>(dwSize) * 3 - 1);
     for (DWORD i = 0; i < dwSize; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') 
-           << static_cast<int>(pData[i]);
+        BYTE value = pData[i];
+        result.push_back(HEX_DIGITS[(value >> 4) & 0x0F]);
+        result.push_back(HEX_DIGITS[value & 0x0F]);
         if (i < dwSize - 1) {
-            ss << " ";
+            result.push_back(' ');
         }
     }
-    return ss.str();
+    return result;
 }
 
 std::vector<BYTE> StringToHex(const std::string& str) {
     std::vector<BYTE> result;
-    try {
-        std::string cleanStr;
-        
-        // 移除所有非十六进制字符
-        for (char c : str) {
-            if (isxdigit(static_cast<unsigned char>(c))) {
-                cleanStr += c;
-            }
-        }
-        
-        // 确保长度为偶数
-        if (cleanStr.length() % 2 != 0) {
-            cleanStr = "0" + cleanStr;
-        }
+    std::string cleanStr;
+    cleanStr.reserve(str.size());
 
-        // 每两个字符转换一个字节
-        for (size_t i = 0; i + 1 < cleanStr.length(); i += 2) {
-            std::string byteStr = cleanStr.substr(i, 2);
-            BYTE b = static_cast<BYTE>(std::stoul(byteStr, nullptr, 16));
-            result.push_back(b);
+    for (char c : str) {
+        if (std::isxdigit(static_cast<unsigned char>(c))) {
+            cleanStr.push_back(c);
         }
-    } catch (...) {
-        result.clear();
     }
-    
+
+    if (cleanStr.length() % 2 != 0) {
+        cleanStr.insert(cleanStr.begin(), '0');
+    }
+
+    result.reserve(cleanStr.length() / 2);
+    for (size_t i = 0; i + 1 < cleanStr.length(); i += 2) {
+        BYTE value = 0;
+        if (!TryParseHexBytePair(cleanStr[i], cleanStr[i + 1], value)) {
+            result.clear();
+            return result;
+        }
+        result.push_back(value);
+    }
+
     return result;
 }
 
@@ -1768,12 +1821,14 @@ void ProcessReceivedGamePackets(const BYTE* pData, DWORD dwSize,
  * @return 十六进制字符串（小写）
  */
 static std::string BytesToHexString(const BYTE* data, DWORD len) {
-    std::stringstream ss;
-    ss << std::hex << std::setfill('0');
+    std::string result;
+    result.reserve(static_cast<size_t>(len) * 2);
     for (DWORD i = 0; i < len; ++i) {
-        ss << std::setw(2) << static_cast<int>(data[i]);
+        BYTE value = data[i];
+        result.push_back(HEX_DIGITS[(value >> 4) & 0x0F]);
+        result.push_back(HEX_DIGITS[value & 0x0F]);
     }
-    return ss.str();
+    return result;
 }
 
 /**
@@ -1822,9 +1877,12 @@ std::wstring BuildLoginUrl(const std::wstring& hexPacket) {
     
     // 将十六进制 key 转为字节数组，然后作为 GBK 文本
     std::string keyText;
+    keyText.reserve(keyHex.length() / 2);
     for (size_t i = 0; i + 1 < keyHex.length(); i += 2) {
-        std::wstring byteStr = keyHex.substr(i, 2);
-        BYTE b = static_cast<BYTE>(std::stoi(byteStr, nullptr, 16));
+        BYTE b = 0;
+        if (!TryParseHexBytePair(static_cast<char>(keyHex[i]), static_cast<char>(keyHex[i + 1]), b)) {
+            return L"";
+        }
         keyText.push_back(static_cast<char>(b));
     }
     
@@ -2970,7 +3028,11 @@ DWORD WINAPI DecomposeThreadProc(LPVOID lpParam) {
         const auto& indexStr = indexList[i];
 
         // 将字符串索引转换为整数
-        int indexValue = std::stoi(indexStr);
+        int indexValue = 0;
+        if (!TryParseIntDecimal(indexStr, indexValue)) {
+            allSuccess = FALSE;
+            continue;
+        }
 
         // 使用 PacketBuilder 构建分解封包
         // Opcode: 1185814, Params: symmIndex
@@ -3362,7 +3424,7 @@ BOOL SendBeibeiHealPacket() {
 // ============ MD5图片验证自动回复 ============
 
 // 图片内容MD5 -> 正反值映射表 (1=正面/面向你, 0=反面/背向你)
-static std::unordered_map<std::string, int> g_md5FaceMap = {
+static const Md5FaceEntry g_md5FaceEntries[] = {
     {"6817be5af4b0e77f8446e5a007a4cc28", 0},
     {"74b9314abf6f6cfd2238c6a6236eb5f6", 0},
     {"4d622957f07627b2bc3709f70d669042", 0},
@@ -3499,9 +3561,10 @@ static std::string DownloadImageAndGetMD5(const std::string& imageMd5) {
 
 // 查找图片正反值
 static int FindFaceValue(const std::string& imageContentMd5) {
-    auto it = g_md5FaceMap.find(imageContentMd5);
-    if (it != g_md5FaceMap.end()) {
-        return it->second;
+    for (const auto& entry : g_md5FaceEntries) {
+        if (imageContentMd5 == entry.md5) {
+            return entry.face;
+        }
     }
     return -1;  // 未找到
 }
@@ -4799,7 +4862,7 @@ DWORD WINAPI DailyTaskThreadProc(LPVOID lpParam) {
 /**
  * @brief Opcode 到标签的映射
  */
-static std::map<uint32_t, std::string> g_PacketLabels = {
+static const PacketLabelEntry g_packetLabelEntries[] = {
     // ========== 战斗相关 ==========
     {1186049, "战斗准备"},
     {1317120, "战斗开始"},
@@ -4854,9 +4917,10 @@ static std::map<uint32_t, std::string> g_PacketLabels = {
 
 std::string GetPacketLabel(uint32_t opcode, bool bSend) {
     // 只对发送包或特定响应包显示标签
-    auto it = g_PacketLabels.find(opcode);
-    if (it != g_PacketLabels.end()) {
-        return it->second;
+    for (const auto& entry : g_packetLabelEntries) {
+        if (entry.opcode == opcode) {
+            return entry.label;
+        }
     }
     return "";
 }
@@ -5940,17 +6004,11 @@ void ProcessCollectResponse(const GamePacket& packet) {
  * @param bodyValues Body值列表
  * @return 封包数据
  */
-static std::vector<BYTE> BuildStrawberryPacket(const std::string& operation, const std::vector<int32_t>& bodyValues) {
-    return BuildActivityPacket(Opcode::ACTIVITY_QINGYANG_NEW_SEND, StrawberryPick::ACTIVITY_ID, operation, bodyValues);
-}
-
 /**
  * @brief 采摘红莓果 - 发送活动操作封包
  */
 BOOL SendStrawberryPacket(const std::string& operation, const std::vector<int32_t>& bodyValues) {
-    std::vector<BYTE> packet = BuildStrawberryPacket(operation, bodyValues);
-    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()), 
-                      Opcode::ACTIVITY_QUERY_BACK, WpeHook::TIMEOUT_RESPONSE);
+    return SendActivityPacket(StrawberryPick::ACTIVITY_ID, operation, bodyValues);
 }
 
 /**
@@ -8631,7 +8689,10 @@ static std::string ExtractJsonString(const std::string& json, const std::string&
 static int ExtractJsonInt(const std::string& json, const std::string& key) {
     size_t pos = json.find("\"" + key + "\":");
     if (pos != std::string::npos) {
-        return std::stoi(json.substr(pos + key.length() + 3));
+        int value = 0;
+        if (TryParseIntDecimal(json.substr(pos + key.length() + 3), value)) {
+            return value;
+        }
     }
     return 0;
 }
@@ -8639,7 +8700,10 @@ static int ExtractJsonInt(const std::string& json, const std::string& key) {
 static uint32_t ExtractJsonUInt(const std::string& json, const std::string& key) {
     size_t pos = json.find("\"" + key + "\":");
     if (pos != std::string::npos) {
-        return static_cast<uint32_t>(std::stoull(json.substr(pos + key.length() + 3)));
+        uint32_t value = 0;
+        if (TryParseUInt32Decimal(json.substr(pos + key.length() + 3), value)) {
+            return value;
+        }
     }
     return 0;
 }
@@ -9000,4 +9064,3 @@ void RegisterHorseCompetitionHandlers() {
         ProcessHorseCompetitionResponse
     );
 }
-

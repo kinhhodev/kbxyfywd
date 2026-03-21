@@ -5,8 +5,8 @@
 #include "ui_bridge.h"
 #include "utils.h"
 #include <wininet.h>
+#include <cstdlib>
 #include <unordered_map>
-#include <regex>
 #pragma comment(lib, "wininet.lib")
 
 // 轻量级ZIP解压辅助函数（纯内存，使用已加载的zlib）
@@ -70,7 +70,12 @@ static std::vector<BossInfo> g_bossList;
 // ============================================================================
 // Buff 名称常量 (参考 AS3 BufData.as BUF_NAME)
 // ============================================================================
-static const std::unordered_map<int, std::wstring> BUF_NAME_MAP = {
+struct BufNameEntry {
+    int id;
+    const wchar_t* name;
+};
+
+static const BufNameEntry BUF_NAME_ENTRIES[] = {
     {1, L"昏迷"}, {2, L"流血"}, {3, L"速度下降"}, {4, L"速度提升"},
     {5, L"防御力下降"}, {6, L"防御力提升"}, {7, L"攻击力下降"}, {8, L"攻击力提升"},
     {9, L"中毒"}, {10, L"受到法术伤害异常"}, {11, L"受到物理伤害异常"},
@@ -91,53 +96,6 @@ static const int SPECIAL_BUF_IDS[] = {3, 4, 5, 6, 7, 8, 18, 19, 21, 20, 23, 22};
 // XML解析辅助函数
 // ============================================================================
 
-/**
- * @brief 通用的XML解析辅助函数，用于从XML中提取ID和名称
- * @param xml XML字符串
- * @param blockRe 用于匹配块的正则表达式
- * @param idRe 用于提取ID的正则表达式
- * @param nameRe 用于提取名称的正则表达式
- * @param trimWhitespace 是否修剪空白字符
- * @return 解析结果的vector，每个元素是pair<id, name>
- */
-static std::vector<std::pair<int, std::wstring>> ParseXmlBlocks(
-    const std::string& xml,
-    const std::regex& blockRe,
-    const std::regex& idRe,
-    const std::regex& nameRe,
-    bool trimWhitespace = true) {
-    
-    std::vector<std::pair<int, std::wstring>> results;
-    
-    auto blockBegin = std::sregex_iterator(xml.begin(), xml.end(), blockRe);
-    auto blockEnd = std::sregex_iterator();
-    
-    for (auto it = blockBegin; it != blockEnd; ++it) {
-        std::string block = it->str();
-        std::smatch idMatch, nameMatch;
-        
-        if (std::regex_search(block, idMatch, idRe) && std::regex_search(block, nameMatch, nameRe)) {
-            int id = 0;
-            try { id = std::stoi(idMatch.str(1)); } catch (...) { continue; }
-            
-            std::wstring name = Utf8ToWide(nameMatch.str(1));
-            
-            if (trimWhitespace) {
-                while (!name.empty() && (name.back() == L' ' || name.back() == L'\t' || 
-                       name.back() == L'\n' || name.back() == L'\r')) {
-                    name.pop_back();
-                }
-            }
-            
-            if (!name.empty()) {
-                results.push_back({id, name});
-            }
-        }
-    }
-    
-    return results;
-}
-
 static void TrimTrailingWhitespace(std::wstring& text) {
     while (!text.empty() && (text.back() == L' ' || text.back() == L'\t' ||
            text.back() == L'\n' || text.back() == L'\r')) {
@@ -146,11 +104,162 @@ static void TrimTrailingWhitespace(std::wstring& text) {
 }
 
 static bool TryParseInt(const std::string& text, int& value) {
-    try {
-        value = std::stoi(text);
-        return true;
-    } catch (...) {
+    if (text.empty()) {
         return false;
+    }
+
+    char* end = nullptr;
+    const long parsed = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+static bool ExtractTagValue(const std::string& xml, const char* tagName, std::string& value, size_t startPos = 0) {
+    const std::string openTag = std::string("<") + tagName + ">";
+    const std::string closeTag = std::string("</") + tagName + ">";
+
+    size_t openPos = xml.find(openTag, startPos);
+    if (openPos == std::string::npos) {
+        return false;
+    }
+    openPos += openTag.size();
+
+    size_t closePos = xml.find(closeTag, openPos);
+    if (closePos == std::string::npos) {
+        return false;
+    }
+
+    value = xml.substr(openPos, closePos - openPos);
+    return true;
+}
+
+static const wchar_t* FindBuiltInBufName(int bufId) {
+    for (const auto& entry : BUF_NAME_ENTRIES) {
+        if (entry.id == bufId) {
+            return entry.name;
+        }
+    }
+    return nullptr;
+}
+
+static bool IsSpecialBufId(int bufId) {
+    for (int id : SPECIAL_BUF_IDS) {
+        if (id == bufId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ExtractAttributeValue(const std::string& tagText, const char* attrName, std::string& value) {
+    const std::string pattern = std::string(attrName) + "=";
+    size_t pos = tagText.find(pattern);
+    if (pos == std::string::npos) {
+        return false;
+    }
+
+    pos += pattern.size();
+    while (pos < tagText.size() && (tagText[pos] == ' ' || tagText[pos] == '\t')) {
+        ++pos;
+    }
+    if (pos >= tagText.size()) {
+        return false;
+    }
+
+    char quote = 0;
+    if (tagText[pos] == '\'' || tagText[pos] == '"') {
+        quote = tagText[pos++];
+    }
+
+    const size_t end = quote ? tagText.find(quote, pos)
+                             : tagText.find_first_of(" \t\r\n>", pos);
+    if (end == std::string::npos) {
+        return false;
+    }
+
+    value = tagText.substr(pos, end - pos);
+    return true;
+}
+
+static bool FindElementBlock(const std::string& xml,
+                             const char* tagName,
+                             size_t searchStart,
+                             size_t& contentStart,
+                             size_t& closeStart,
+                             size_t& nextPos,
+                             std::string* startTagText = nullptr) {
+    const std::string openPattern = std::string("<") + tagName;
+    const std::string closePattern = std::string("</") + tagName + ">";
+
+    size_t openPos = xml.find(openPattern, searchStart);
+    if (openPos == std::string::npos) {
+        return false;
+    }
+
+    const size_t tagEnd = xml.find('>', openPos);
+    if (tagEnd == std::string::npos) {
+        return false;
+    }
+
+    if (startTagText) {
+        *startTagText = xml.substr(openPos, tagEnd - openPos + 1);
+    }
+
+    contentStart = tagEnd + 1;
+    closeStart = xml.find(closePattern, contentStart);
+    if (closeStart == std::string::npos) {
+        return false;
+    }
+
+    nextPos = closeStart + closePattern.size();
+    return true;
+}
+
+static bool FindSectionByType(const std::string& xml, const char* typeValue, std::string& section) {
+    size_t searchPos = 0;
+    std::string startTag;
+    size_t contentStart = 0;
+    size_t closeStart = 0;
+    size_t nextPos = 0;
+
+    while (FindElementBlock(xml, "items", searchPos, contentStart, closeStart, nextPos, &startTag)) {
+        std::string actualType;
+        if (ExtractAttributeValue(startTag, "type", actualType) && actualType == typeValue) {
+            section = xml.substr(contentStart, closeStart - contentStart);
+            return true;
+        }
+        searchPos = nextPos;
+    }
+
+    return false;
+}
+
+static void ParseNamedItemsSection(const std::string& section, std::unordered_map<int, std::wstring>& target, int startIndex) {
+    size_t searchPos = 0;
+    int index = startIndex;
+
+    while (true) {
+        size_t tagPos = section.find("<item", searchPos);
+        if (tagPos == std::string::npos) {
+            break;
+        }
+
+        const size_t tagEnd = section.find('>', tagPos);
+        if (tagEnd == std::string::npos) {
+            break;
+        }
+
+        std::string tagText = section.substr(tagPos, tagEnd - tagPos + 1);
+        std::string name;
+        if (ExtractAttributeValue(tagText, "name", name)) {
+            target[index++] = Utf8ToWide(name);
+        }
+
+        searchPos = tagEnd + 1;
     }
 }
 
@@ -176,17 +285,11 @@ static std::wstring GetBufName(int bufId, int param1 = 0) {
     }
     
     // 使用内置的名称映射
-    auto nameIt = BUF_NAME_MAP.find(bufId);
-    if (nameIt != BUF_NAME_MAP.end()) {
-        std::wstring baseName = nameIt->second;
-        
-        // 检查是否为特殊 Buff (需要显示等级)
-        bool isSpecial = false;
-        for (int id : SPECIAL_BUF_IDS) {
-            if (id == bufId) { isSpecial = true; break; }
-        }
-        
-        if (isSpecial && param1 != 0) {
+    const wchar_t* builtInName = FindBuiltInBufName(bufId);
+    if (builtInName != nullptr) {
+        std::wstring baseName = builtInName;
+
+        if (IsSpecialBufId(bufId) && param1 != 0) {
             int level = (param1 > 0) ? param1 : -param1;
             return baseName + std::to_wstring(level) + L"级";
         }
@@ -285,46 +388,49 @@ static std::string NormalizeXmlUtf8(const std::vector<uint8_t>& data) {
 }
 
 static void ParseSpriteXml(const std::string& xml) {
-    // 预编译正则表达式（static const 避免重复编译）
-    static const std::regex spriteBlockRe(R"(<sprite[^>]*id\s*=\s*["'](\d+)["'][^>]*>([\s\S]*?)</sprite>)", std::regex_constants::icase);
-    static const std::regex nameRe(R"(<name>\s*([^<]+?)\s*</name>)", std::regex_constants::icase);
-    static const std::regex elemRe(R"(<elem>\s*(\d+)\s*</elem>)", std::regex_constants::icase);
-    
     std::vector<BossInfo> bossList;
     std::vector<std::pair<int, std::wstring>> petNames;
     std::vector<std::pair<int, int>> petElems;
-    
-    auto blockBegin = std::sregex_iterator(xml.begin(), xml.end(), spriteBlockRe);
-    auto blockEnd = std::sregex_iterator();
-    
-    for (auto it = blockBegin; it != blockEnd; ++it) {
-        int id = 0;
-        if (!TryParseInt(it->str(1), id)) {
+
+    size_t searchPos = 0;
+    size_t contentStart = 0;
+    size_t closeStart = 0;
+    size_t nextPos = 0;
+    std::string startTag;
+    while (FindElementBlock(xml, "sprite", searchPos, contentStart, closeStart, nextPos, &startTag)) {
+        std::string idText;
+        if (!ExtractAttributeValue(startTag, "id", idText)) {
+            searchPos = nextPos;
             continue;
         }
-        std::string content = it->str(2);
-        
-        // 从sprite块内容中提取name
+
+        int id = 0;
+        if (!TryParseInt(idText, id)) {
+            searchPos = nextPos;
+            continue;
+        }
+
+        std::string content = xml.substr(contentStart, closeStart - contentStart);
         std::wstring name;
-        std::smatch nameMatch;
-        if (std::regex_search(content, nameMatch, nameRe)) {
-            name = Utf8ToWide(nameMatch.str(1));
+        std::string nameText;
+        if (ExtractTagValue(content, "name", nameText)) {
+            name = Utf8ToWide(nameText);
             TrimTrailingWhitespace(name);
             petNames.emplace_back(id, name);
         }
-        
-        // 从sprite块内容中提取elem（系别ID）
+
         int elemId = 0;
-        std::smatch elemMatch;
-        if (std::regex_search(content, elemMatch, elemRe)) {
-            TryParseInt(elemMatch.str(1), elemId);
+        std::string elemText;
+        if (ExtractTagValue(content, "elem", elemText)) {
+            TryParseInt(elemText, elemId);
             petElems.emplace_back(id, elemId);
         }
-        
-        // ID大于10000的是BOSS，添加到BOSS列表
+
         if (id > 10000 && !name.empty()) {
             bossList.push_back({id, name, elemId});
         }
+
+        searchPos = nextPos;
     }
 
     std::lock_guard<std::mutex> lock(g_dataMapsMutex);
@@ -338,31 +444,46 @@ static void ParseSpriteXml(const std::string& xml) {
 }
 
 static void ParseSkillXml(const std::string& xml) {
-    // 先提取每个<skill>块，然后解析其中的idx、name和power
-    static const std::regex skillRe(R"(<skill>\s*<idx>\s*(\d+)\s*</idx>\s*<name>\s*([^<]+?)\s*</name>[\s\S]*?<power>\s*(\d+)\s*</power>[\s\S]*?</skill>)", std::regex_constants::icase);
-    auto begin = std::sregex_iterator(xml.begin(), xml.end(), skillRe);
-    auto end = std::sregex_iterator();
-
     std::vector<std::pair<int, std::wstring>> skillNames;
     std::vector<std::pair<int, int>> skillPowers;
 
-    for (auto it = begin; it != end; ++it) {
-        int id = 0;
-        if (!TryParseInt(it->str(1), id)) {
+    size_t searchPos = 0;
+    size_t contentStart = 0;
+    size_t closeStart = 0;
+    size_t nextPos = 0;
+    while (FindElementBlock(xml, "skill", searchPos, contentStart, closeStart, nextPos)) {
+        std::string content = xml.substr(contentStart, closeStart - contentStart);
+        std::string idText;
+        std::string nameText;
+        std::string powerText;
+        if (!ExtractTagValue(content, "idx", idText) ||
+            !ExtractTagValue(content, "name", nameText) ||
+            !ExtractTagValue(content, "power", powerText)) {
+            searchPos = nextPos;
             continue;
         }
-        if (id == 0) continue;
-        
-        // 解析名称
-        std::wstring name = Utf8ToWide(it->str(2));
+
+        int id = 0;
+        if (!TryParseInt(idText, id)) {
+            searchPos = nextPos;
+            continue;
+        }
+        if (id == 0) {
+            searchPos = nextPos;
+            continue;
+        }
+
+        std::wstring name = Utf8ToWide(nameText);
         TrimTrailingWhitespace(name);
         int power = 0;
-        if (!TryParseInt(it->str(3), power)) {
+        if (!TryParseInt(powerText, power)) {
+            searchPos = nextPos;
             continue;
         }
 
         skillNames.emplace_back(id, name);
         skillPowers.emplace_back(id, power);
+        searchPos = nextPos;
     }
 
     std::lock_guard<std::mutex> lock(g_dataMapsMutex);
@@ -375,100 +496,112 @@ static void ParseSkillXml(const std::string& xml) {
 }
 
 static void ParseMapXml(const std::string& xml) {
-    static const std::regex tagRe(R"(<\s*(country|scene|map)[^>]*>)", std::regex_constants::icase);
-    static const std::regex idRe(R"(\bid\s*=\s*['"]?\s*(-?\d+)\s*['"]?)", std::regex_constants::icase);
-    static const std::regex nameRe(R"(\bname\s*=\s*['"]\s*([^'"]+)\s*['"])", std::regex_constants::icase);
-    auto tb = std::sregex_iterator(xml.begin(), xml.end(), tagRe);
-    auto te = std::sregex_iterator();
-    for (auto it = tb; it != te; ++it) {
-        std::string tag = it->str();
-        std::smatch m1, m2;
-        if (std::regex_search(tag, m1, idRe) && std::regex_search(tag, m2, nameRe)) {
-            int id = 0;
-            if (!TryParseInt(m1.str(1), id)) continue;
-            std::wstring name = Utf8ToWide(m2.str(1));
-            std::lock_guard<std::mutex> lock(g_dataMapsMutex);
-            g_mapNames[id] = name;
+    size_t searchPos = 0;
+    while (true) {
+        size_t tagPos = xml.find('<', searchPos);
+        if (tagPos == std::string::npos) {
+            break;
         }
+
+        const size_t tagEnd = xml.find('>', tagPos);
+        if (tagEnd == std::string::npos) {
+            break;
+        }
+
+        const std::string tag = xml.substr(tagPos, tagEnd - tagPos + 1);
+        if (tag.rfind("<country", 0) == 0 || tag.rfind("<scene", 0) == 0 || tag.rfind("<map", 0) == 0) {
+            std::string idText;
+            std::string nameText;
+            if (ExtractAttributeValue(tag, "id", idText) && ExtractAttributeValue(tag, "name", nameText)) {
+                int id = 0;
+                if (TryParseInt(idText, id)) {
+                    std::wstring name = Utf8ToWide(nameText);
+                    std::lock_guard<std::mutex> lock(g_dataMapsMutex);
+                    g_mapNames[id] = name;
+                }
+            }
+        }
+
+        searchPos = tagEnd + 1;
     }
 }
 
 static void ParseToolXml(const std::string& xml) {
-    static const std::regex re(R"(<tool[^>]*id\s*=\s*['"]?\s*(\d+)\s*['"]?[^>]*>[\s\S]*?<name>([^<]+)</name>)", std::regex_constants::icase);
-    auto begin = std::sregex_iterator(xml.begin(), xml.end(), re);
-    auto end = std::sregex_iterator();
-    for (auto it = begin; it != end; ++it) {
+    size_t searchPos = 0;
+    size_t contentStart = 0;
+    size_t closeStart = 0;
+    size_t nextPos = 0;
+    std::string startTag;
+    while (FindElementBlock(xml, "tool", searchPos, contentStart, closeStart, nextPos, &startTag)) {
+        std::string idText;
+        std::string nameText;
+        if (!ExtractAttributeValue(startTag, "id", idText) || !ExtractTagValue(xml.substr(contentStart, closeStart - contentStart), "name", nameText)) {
+            searchPos = nextPos;
+            continue;
+        }
+
         int id = 0;
-        if (!TryParseInt(it->str(1), id)) continue;
-        std::wstring name = Utf8ToWide(it->str(2));
+        if (!TryParseInt(idText, id)) {
+            searchPos = nextPos;
+            continue;
+        }
+        std::wstring name = Utf8ToWide(nameText);
         std::lock_guard<std::mutex> lock(g_dataMapsMutex);
         g_toolNames[id] = name;
+        searchPos = nextPos;
     }
 }
 
 // 解析 Buff 信息 (bufInfo.xml)
 static void ParseBufInfoXml(const std::string& xml) {
-    // 预编译正则表达式
-    static const std::regex bufRe(R"(<bufInfo[^>]*id\s*=\s*['"]?\s*(\d+)\s*['"]?[^>]*>([\s\S]*?)</bufInfo>)", std::regex_constants::icase);
-    static const std::regex nameRe(R"(<name>([^<]+)</name>)", std::regex_constants::icase);
-    static const std::regex descRe(R"(<combat_desc>([^<]+)</combat_desc>)", std::regex_constants::icase);
-    
-    auto begin = std::sregex_iterator(xml.begin(), xml.end(), bufRe);
-    auto end = std::sregex_iterator();
-    
     std::lock_guard<std::mutex> lock(g_dataMapsMutex);
-    // 清空旧数据
     g_bufNames.clear();
     g_bufDescs.clear();
-    
-    for (auto it = begin; it != end; ++it) {
+
+    size_t searchPos = 0;
+    size_t contentStart = 0;
+    size_t closeStart = 0;
+    size_t nextPos = 0;
+    std::string startTag;
+    while (FindElementBlock(xml, "bufInfo", searchPos, contentStart, closeStart, nextPos, &startTag)) {
+        std::string idText;
+        if (!ExtractAttributeValue(startTag, "id", idText)) {
+            searchPos = nextPos;
+            continue;
+        }
+
         int id = 0;
-        if (!TryParseInt(it->str(1), id)) continue;
-        std::string content = it->str(2);
-        
-        // 提取 name
-        std::smatch nameMatch;
-        if (std::regex_search(content, nameMatch, nameRe)) {
-            g_bufNames[id] = Utf8ToWide(nameMatch.str(1));
+        if (!TryParseInt(idText, id)) {
+            searchPos = nextPos;
+            continue;
         }
-        
-        // 提取 combat_desc
-        std::smatch descMatch;
-        if (std::regex_search(content, descMatch, descRe)) {
-            g_bufDescs[id] = Utf8ToWide(descMatch.str(1));
+
+        std::string content = xml.substr(contentStart, closeStart - contentStart);
+        std::string nameText;
+        if (ExtractTagValue(content, "name", nameText)) {
+            g_bufNames[id] = Utf8ToWide(nameText);
         }
+
+        std::string descText;
+        if (ExtractTagValue(content, "combat_desc", descText)) {
+            g_bufDescs[id] = Utf8ToWide(descText);
+        }
+
+        searchPos = nextPos;
     }
 }
 
 // 解析系别和性格数据 (monsternature.xml)
 static void ParseMonsterNatureXml(const std::string& xml) {
-    // 预编译正则表达式
-    static const std::regex elemRe(R"(<items[^>]*type\s*=\s*['"]?\s*1\s*['"]?[^>]*>([\s\S]*?)</items>)", std::regex_constants::icase);
-    static const std::regex geniusRe(R"(<items[^>]*type\s*=\s*['"]?\s*0\s*['"]?[^>]*>([\s\S]*?)</items>)", std::regex_constants::icase);
-    static const std::regex itemRe(R"(<item\s+name\s*=\s*['"]([^'"]+)['"])", std::regex_constants::icase);
-
     std::lock_guard<std::mutex> lock(g_dataMapsMutex);
-    // 先清空旧数据
     g_elemNames.clear();
     g_geniusNames.clear();
 
-    // 解析系别 (items type="1")
-    {
-        std::smatch elemMatch;
-        if (std::regex_search(xml, elemMatch, elemRe)) {
-            std::string elemSection = elemMatch.str(1);
-            // 系别ID从0开始：0=金, 1=木, 2=水...
-            auto begin = std::sregex_iterator(elemSection.begin(), elemSection.end(), itemRe);
-            auto end = std::sregex_iterator();
-            int idx = 0;  // 从0开始编号
-            for (auto it = begin; it != end; ++it) {
-                std::wstring name = Utf8ToWide(it->str(1));
-                g_elemNames[idx++] = name;
-            }
-        }
+    std::string elemSection;
+    if (FindSectionByType(xml, "1", elemSection)) {
+        ParseNamedItemsSection(elemSection, g_elemNames, 0);
     }
 
-    // 如果解析失败，使用默认系别表（ID从0开始）
     if (g_elemNames.empty()) {
         static const wchar_t* defaultElems[] = {
             L"金", L"木", L"水", L"火", L"土", L"妖", L"魔", L"毒", L"圣",
@@ -480,20 +613,9 @@ static void ParseMonsterNatureXml(const std::string& xml) {
         }
     }
 
-    // 解析性格 (items type="0")
-    {
-        std::smatch geniusMatch;
-        if (std::regex_search(xml, geniusMatch, geniusRe)) {
-            std::string geniusSection = geniusMatch.str(1);
-            // 性格编号从1开始
-            auto begin = std::sregex_iterator(geniusSection.begin(), geniusSection.end(), itemRe);
-            auto end = std::sregex_iterator();
-            int idx = 1;
-            for (auto it = begin; it != end; ++it) {
-                std::wstring name = Utf8ToWide(it->str(1));
-                g_geniusNames[idx++] = name;
-            }
-        }
+    std::string geniusSection;
+    if (FindSectionByType(xml, "0", geniusSection)) {
+        ParseNamedItemsSection(geniusSection, g_geniusNames, 1);
     }
     
     // 如果解析失败，使用默认性格表
@@ -514,46 +636,6 @@ static void ParseMonsterNatureXml(const std::string& xml) {
     };
     for (int i = 0; i <= 6; i++) {
         g_aptitudeNames[i] = aptitudeLevelNames[i];
-    }
-}
-
-// 资质等级计算函数 (根据AS3 SpiritGenius.as)
-static int CheckGenius(int geniusValue) {
-    // 单项资质等级计算
-    if (geniusValue >= 0 && geniusValue <= 5) return 2;
-    if (geniusValue >= 6 && geniusValue <= 11) return 3;
-    if (geniusValue >= 12 && geniusValue <= 17) return 4;
-    if (geniusValue >= 18 && geniusValue <= 26) return 5;
-    if (geniusValue >= 27 && geniusValue <= 31) return 6;
-    return 1;
-}
-
-static int CountGeniusType(int g1, int g2, int g3, int g4, int g5, int g6) {
-    // 总资质计算: 6个单项资质等级之和 - 6
-    int total = g1 + g2 + g3 + g4 + g5 + g6 - 6;
-    if (total >= 5 && total <= 9) return 1;
-    if (total >= 10 && total <= 14) return 2;
-    if (total >= 15 && total <= 19) return 3;
-    if (total >= 20 && total <= 24) return 4;
-    if (total >= 25 && total <= 29) return 5;
-    if (total == 30) return 6;
-    return 0;
-}
-
-static void ParseIdNameLines(const std::string& txt, std::unordered_map<int, std::wstring>& outMap) {
-    size_t pos = 0;
-    while (pos < txt.size()) {
-        size_t eol = txt.find('\n', pos);
-        if (eol == std::string::npos) eol = txt.size();
-        std::string line = txt.substr(pos, eol - pos);
-        pos = eol + 1;
-        if (line.empty()) continue;
-        size_t plus = line.find('+');
-        if (plus == std::string::npos) continue;
-        int id = 0;
-        if (!TryParseInt(line.substr(0, plus), id)) continue;
-        std::wstring name = Utf8ToWide(line.substr(plus + 1));
-        outMap[id] = name;
     }
 }
 
