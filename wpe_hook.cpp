@@ -8,8 +8,6 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <wincrypt.h>
-#include <cctype>
-#include <cstdlib>
 #include <string>
 #include <vector>
 #include <memory>
@@ -61,27 +59,10 @@ extern ICoreWebView2* g_webview;
 // 前向声明
 void ProcessMD5CheckAndReply(const std::vector<BYTE>& body, uint32_t params);
 
-struct ItemNameEntry {
-    uint32_t id;
-    const wchar_t* name;
-};
-
-struct ItemPriceEntry {
-    uint32_t id;
-    uint32_t price;
-};
-
 struct Md5FaceEntry {
     const char* md5;
     int face;
 };
-
-struct PacketLabelEntry {
-    uint32_t opcode;
-    const char* label;
-};
-
-constexpr char HEX_DIGITS[] = "0123456789abcdef";
 
 bool TryParseUInt32Decimal(const std::string& text, uint32_t& value) {
     if (text.empty()) {
@@ -110,24 +91,6 @@ bool TryParseIntDecimal(const std::string& text, int& value) {
     }
 
     value = static_cast<int>(parsed);
-    return true;
-}
-
-bool TryParseHexBytePair(char high, char low, BYTE& value) {
-    auto hexValue = [](unsigned char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
-
-    int hi = hexValue(static_cast<unsigned char>(high));
-    int lo = hexValue(static_cast<unsigned char>(low));
-    if (hi < 0 || lo < 0) {
-        return false;
-    }
-
-    value = static_cast<BYTE>((hi << 4) | lo);
     return true;
 }
 
@@ -789,54 +752,6 @@ BOOL SendUsePropsPacket(uint32_t itemId, uint32_t spiritId,
  * @param itemId 道具ID
  * @return 道具名称
  */
-std::wstring GetItemName(uint32_t itemId) {
-    static const ItemNameEntry itemNames[] = {
-        {100005, L"蟠桃"},
-        {100006, L"大金创药"},
-        {100007, L"中金创药"},
-        {100008, L"小金创药"},
-        {100009, L"天仙玉露"},
-        {100010, L"小型法力药剂"},
-        {100011, L"中型法力药剂"},
-        {100012, L"大型法力药剂"},
-        {100031, L"活血散"},
-        {100034, L"天香丸"},
-    };
-
-    for (const auto& entry : itemNames) {
-        if (entry.id == itemId) {
-            return entry.name;
-        }
-    }
-
-    return std::to_wstring(itemId);
-}
-
-/**
- * @brief 获取道具价格
- * @param itemId 道具ID
- * @return 道具价格
- */
-uint32_t GetItemPrice(uint32_t itemId) {
-    static const ItemPriceEntry itemPrices[] = {
-        {100006, 120},
-        {100007, 50},
-        {100008, 20},
-        {100010, 100},
-        {100011, 150},
-        {100012, 200},
-        {100031, 350},
-    };
-
-    for (const auto& entry : itemPrices) {
-        if (entry.id == itemId) {
-            return entry.price;
-        }
-    }
-
-    return 0;
-}
-
 /**
  * @brief 获取物品位置
  * @param itemId 物品ID
@@ -1459,52 +1374,6 @@ void SetPacketCallback(PACKET_CALLBACK callback) {
 // 十六进制转换工具
 // ============================================================================
 
-std::string HexToString(const BYTE* pData, DWORD dwSize) {
-    if (dwSize == 0) {
-        return "";
-    }
-
-    std::string result;
-    result.reserve(static_cast<size_t>(dwSize) * 3 - 1);
-    for (DWORD i = 0; i < dwSize; i++) {
-        BYTE value = pData[i];
-        result.push_back(HEX_DIGITS[(value >> 4) & 0x0F]);
-        result.push_back(HEX_DIGITS[value & 0x0F]);
-        if (i < dwSize - 1) {
-            result.push_back(' ');
-        }
-    }
-    return result;
-}
-
-std::vector<BYTE> StringToHex(const std::string& str) {
-    std::vector<BYTE> result;
-    std::string cleanStr;
-    cleanStr.reserve(str.size());
-
-    for (char c : str) {
-        if (std::isxdigit(static_cast<unsigned char>(c))) {
-            cleanStr.push_back(c);
-        }
-    }
-
-    if (cleanStr.length() % 2 != 0) {
-        cleanStr.insert(cleanStr.begin(), '0');
-    }
-
-    result.reserve(cleanStr.length() / 2);
-    for (size_t i = 0; i + 1 < cleanStr.length(); i += 2) {
-        BYTE value = 0;
-        if (!TryParseHexBytePair(cleanStr[i], cleanStr[i + 1], value)) {
-            result.clear();
-            return result;
-        }
-        result.push_back(value);
-    }
-
-    return result;
-}
-
 // ============================================================================
 // UI 同步函数
 // ============================================================================
@@ -1813,83 +1682,6 @@ void ProcessReceivedGamePackets(const BYTE* pData, DWORD dwSize,
 // ============================================================================
 // 登录 Key 提取函数实现
 // ============================================================================
-
-/**
- * @brief 字节数组转十六进制字符串
- * @param data 字节数组
- * @param len 长度
- * @return 十六进制字符串（小写）
- */
-static std::string BytesToHexString(const BYTE* data, DWORD len) {
-    std::string result;
-    result.reserve(static_cast<size_t>(len) * 2);
-    for (DWORD i = 0; i < len; ++i) {
-        BYTE value = data[i];
-        result.push_back(HEX_DIGITS[(value >> 4) & 0x0F]);
-        result.push_back(HEX_DIGITS[value & 0x0F]);
-    }
-    return result;
-}
-
-/**
- * @brief 从封包数据提取登录 key（整个封包十六进制字符串）
- * @param pData 封包数据指针
- * @param len 封包长度
- * @return 提取是否成功
- * 
- * 存储整个封包的十六进制字符串，登录时再按易语言逻辑构造 URL
- */
-BOOL ExtractLoginKeyFromPacket(const BYTE* pData, DWORD len) {
-    if (len < 12) return FALSE;  // 至少要有包头
-    
-    // 将整个封包转为十六进制字符串（大写）
-    std::string hexPacket = BytesToHexString(pData, len);
-    
-    // 转换为大写
-    for (auto& c : hexPacket) {
-        c = std::toupper(static_cast<unsigned char>(c));
-    }
-    
-    // 存储整个十六进制封包
-    g_loginKey = Utf8ToWide(hexPacket);
-    g_loginKeyCaptured.store(true);
-    
-    return TRUE;
-}
-
-/**
- * @brief 构造登录 URL
- * @param hexPacket 十六进制封包字符串
- * @return 构造的登录 URL
- *
- * 易语言逻辑：
- * key = 取右边(hexPacket, 28)  // 去掉前28个字符（14字节）
- * URL = "http://enter.wanwan4399.com/bin-debug/KBgameindex.html?" + 十六进制到文本_GBK(key)
- */
-std::wstring BuildLoginUrl(const std::wstring& hexPacket) {
-    const size_t PREFIX_LEN = 28;  // 前28个十六进制字符 = 14字节
-    if (hexPacket.length() <= PREFIX_LEN) {
-        return L"";
-    }
-    
-    // 提取 key（从第28个字符开始到末尾）
-    std::wstring keyHex = hexPacket.substr(PREFIX_LEN);
-    
-    // 将十六进制 key 转为字节数组，然后作为 GBK 文本
-    std::string keyText;
-    keyText.reserve(keyHex.length() / 2);
-    for (size_t i = 0; i + 1 < keyHex.length(); i += 2) {
-        BYTE b = 0;
-        if (!TryParseHexBytePair(static_cast<char>(keyHex[i]), static_cast<char>(keyHex[i + 1]), b)) {
-            return L"";
-        }
-        keyText.push_back(static_cast<char>(b));
-    }
-    
-    // 构造登录 URL
-    std::wstring url = L"http://enter.wanwan4399.com/bin-debug/KBgameindex.html?" + Utf8ToWide(keyText);
-    return url;
-}
 
 // ============================================================================
 // Hook 函数实现
@@ -4862,69 +4654,6 @@ DWORD WINAPI DailyTaskThreadProc(LPVOID lpParam) {
 /**
  * @brief Opcode 到标签的映射
  */
-static const PacketLabelEntry g_packetLabelEntries[] = {
-    // ========== 战斗相关 ==========
-    {1186049, "战斗准备"},
-    {1317120, "战斗开始"},
-    {1317121, "战斗回合开始"},
-    {1317122, "战斗回合结算"},
-    {1317123, "战斗Buff移除"},
-    {1317124, "战斗Buff"},
-    {1317126, "切换妖怪回合"},
-    {1317127, "战斗经验"},
-    {1317130, "战斗新经验"},
-    {1317131, "战斗Buff列表"},
-    {1317154, "战斗技能"},
-    {1317216, "妖怪升级"},
-    {1317256, "战斗奖励"},
-    {1186056, "战斗结束请求"},
-    {1186232, "组队战斗查看"},
-    {1186233, "查看战斗准备"},
-    {1186113, "退出大型战斗"},
-    {1316469, "玩家战斗"},
-
-    // ========== 地图相关 ==========
-    {1184313, "进入场景"},
-    {1315395, "进入场景响应"},
-    {1184519, "切换线路"},
-    {1315591, "切换线路响应"},
-    {1184317, "场景玩家列表"},
-    {1315086, "场景玩家列表响应"},
-    {1315075, "添加玩家到场景"},
-    {1315328, "从场景移除玩家"},
-    {1315124, "玩家替换"},
-    {1183750, "进入世界"},
-    {1314822, "进入世界响应"},
-    {1184029, "退出世界"},
-    {1315101, "退出世界响应"},
-
-    // ========== 贝贝回血 ==========
-    {1186818, "贝贝回血"},
-
-    // ========== 妖怪相关 ==========
-    {1185809, "灵玉查询"},
-    {1316881, "灵玉列表"},
-    {1185814, "分解灵玉"},
-    {1316886, "分解响应"},
-    {1185819, "批量分解"},
-    {1316891, "批量分解响应"},
-    {1318401, "妖怪背包"},
-
-    // ========== 聊天相关 ==========
-    {1315083, "聊天消息"},
-    {1316376, "家族聊天"},
-};
-
-std::string GetPacketLabel(uint32_t opcode, bool bSend) {
-    // 只对发送包或特定响应包显示标签
-    for (const auto& entry : g_packetLabelEntries) {
-        if (entry.opcode == opcode) {
-            return entry.label;
-        }
-    }
-    return "";
-}
-
 // ============================================================================
 // 劫持功能实现
 // ============================================================================

@@ -14,6 +14,7 @@ set(EMBEDDED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/embedded)
 add_executable(WebView2Demo WIN32
     demo.cpp
     wpe_hook.cpp
+    wpe_hook_helpers.cpp
     utils.cpp
     packet_parser.cpp
     packet_builder.cpp
