@@ -6525,6 +6525,9 @@ void BattleSixAutoBattle::EndBattle() {
     m_isInBattle = false;
     m_mySpirits.clear();
     m_enemySpirits.clear();
+    m_enemySid = 0;
+    m_enemyUniqueId = 0;
+    m_myUniqueId = 0;
     UIBridge::Instance().UpdateHelperText(L"战斗结束");
 }
 
@@ -6633,6 +6636,8 @@ void BattleSixAutoBattle::UpdateEnemySpiritHP(int spiritSid, int hp) {
             break;
         }
     }
+
+    RefreshEnemyTarget();
 }
 
 bool BattleSixAutoBattle::IsMySpiritBySid(int sid) const {
@@ -6642,6 +6647,19 @@ bool BattleSixAutoBattle::IsMySpiritBySid(int sid) const {
         }
     }
     return false;
+}
+
+void BattleSixAutoBattle::RefreshEnemyTarget() {
+    m_enemySid = 0;
+    m_enemyUniqueId = 0;
+
+    for (const auto& spirit : m_enemySpirits) {
+        if (!spirit.isDead && spirit.hp > 0) {
+            m_enemySid = spirit.sid;
+            m_enemyUniqueId = spirit.uniqueId;
+            break;
+        }
+    }
 }
 
 int BattleSixAutoBattle::FindNextAliveSpirit(int currentIndex) {
@@ -6684,8 +6702,17 @@ BOOL BattleSixAutoBattle::OnBattleRoundStart() {
     if (skillIndex >= 0) {
         const auto& skill = m_mySpirits[m_currentSpiritIndex].skills[skillIndex];
         
-        // 获取敌方精灵的uniqueId作为target
-        int targetId = g_battleSixAuto.GetEnemyUniqueId();
+        // 技能攻击目标使用敌方当前出战精灵sid，切换精灵才使用uniqueId
+        int targetId = g_battleSixAuto.GetEnemySid();
+
+        if (targetId <= 0) {
+            RefreshEnemyTarget();
+            targetId = g_battleSixAuto.GetEnemySid();
+        }
+
+        if (targetId <= 0) {
+            return FALSE;
+        }
         
         // 使用异步线程发送技能封包
         struct SkillThreadData {
@@ -6779,6 +6806,20 @@ void BattleSixAutoBattle::OnBattleRoundResult(const GamePacket& packet) {
                     break;
                 }
             }
+
+            int newSid = sid;
+            for (size_t i = 0; i < m_enemySpirits.size(); i++) {
+                if (m_enemySpirits[i].uniqueId == uniqueId) {
+                    m_enemySpirits[i].sid = newSid;
+                    m_enemySpirits[i].hp = hp;
+                    m_enemySpirits[i].maxHp = maxHp;
+                    m_enemySpirits[i].level = level;
+                    m_enemySpirits[i].spiritId = spiritId;
+                    m_enemySpirits[i].isDead = (hp <= 0);
+                    RefreshEnemyTarget();
+                    break;
+                }
+            }
         }
     } else if (cmdType == 0) {
         // 普通攻击结果
@@ -6811,6 +6852,8 @@ void BattleSixAutoBattle::OnBattleRoundResult(const GamePacket& packet) {
                     UpdateEnemySpiritHP(atkId, atkHp);
                     UpdateMySpiritHP(defId, defHp);
                 }
+
+                RefreshEnemyTarget();
             }
         }
     }
@@ -7065,6 +7108,7 @@ void ProcessBattleSixBattleStartResponse(const GamePacket& packet) {
         
         // 敌方信息
         if (battleData.otherActiveIndex < static_cast<int>(battleData.otherPets.size())) {
+            g_battleSixAuto.SetEnemySid(battleData.otherPets[battleData.otherActiveIndex].sid);
             g_battleSixAuto.SetEnemyUniqueId(battleData.otherPets[battleData.otherActiveIndex].uniqueId);
         }
     }

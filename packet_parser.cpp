@@ -1427,6 +1427,7 @@ start_done:
             
             // 敌方信息
             if (g_currentBattle.otherActiveIndex < static_cast<int>(g_currentBattle.otherPets.size())) {
+                g_battleSixAuto.SetEnemySid(g_currentBattle.otherPets[g_currentBattle.otherActiveIndex].sid);
                 g_battleSixAuto.SetEnemyUniqueId(g_currentBattle.otherPets[g_currentBattle.otherActiveIndex].uniqueId);
             }
         }

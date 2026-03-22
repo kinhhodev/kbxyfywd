@@ -1949,11 +1949,12 @@ public:
     
     // 精灵管理
     void ParseAllSpiritsFromBattleStart(const GamePacket& packet);
-    void UpdateMySpiritHP(int uniqueId, int hp);
-    void UpdateEnemySpiritHP(int uniqueId, int hp);
+    void UpdateMySpiritHP(int spiritSid, int hp);
+    void UpdateEnemySpiritHP(int spiritSid, int hp);
     bool IsMySpiritBySid(int sid) const;  // 根据sid判断是我方还是敌方
     int FindNextAliveSpirit(int currentIndex);
     void LoadCurrentSpiritSkills();
+    void RefreshEnemyTarget();
     
     // 战斗操作
     BOOL OnBattleRoundStart();
@@ -1969,9 +1970,11 @@ public:
     std::vector<BattleSixSpiritInfo>& GetMySpirits() { return m_mySpirits; }
     std::vector<BattleSixSpiritInfo>& GetEnemySpirits() { return m_enemySpirits; }
     int GetCurrentSpiritIndex() const { return m_currentSpiritIndex; }
+    int GetEnemySid() const { return m_enemySid; }
     int GetEnemyUniqueId() const { return m_enemyUniqueId; }
     int GetMyUniqueId() const { return m_myUniqueId; }
     void SetMyUniqueId(int id) { m_myUniqueId = id; }
+    void SetEnemySid(int id) { m_enemySid = id; }
     void SetEnemyUniqueId(int id) { m_enemyUniqueId = id; }
     void SetCurrentSpiritIndex(int index) { m_currentSpiritIndex = index; }
 };
@@ -3647,7 +3650,6 @@ void StopHorseCompetitionGame();
  * @brief 注册坐骑大赛响应处理器
  */
 void RegisterHorseCompetitionHandlers();
-
 
 
 
