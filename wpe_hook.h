@@ -13,14 +13,10 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
-#include <thread>
 #include <mutex>
-#include <condition_variable>
-#include <chrono>
 #include <atomic>
 #include <map>
 #include <unordered_map>
-#include <queue>
 
 // 包含 packet_parser.h 以使用 MonsterItem 等类型
 #include "packet_parser.h"
@@ -437,6 +433,17 @@ enum HorseRoomStatus {
     HORSE_ROOM_SETTLE = 4      // 结算中
 };
 
+/** 坐骑大赛流程阶段 */
+enum HorseCompetitionPhase {
+    HORSE_PHASE_IDLE = 0,
+    HORSE_PHASE_FETCHING_UI_INFO,
+    HORSE_PHASE_JOINING_ROOM,
+    HORSE_PHASE_WAITING_START,
+    HORSE_PHASE_GAMING,
+    HORSE_PHASE_SETTLING,
+    HORSE_PHASE_FINISHED
+};
+
 /** 坐骑大赛道具类型 */
 enum HorseItemType {
     HORSE_ITEM_MUEN = 1,       // 沐恩 - 全体恢复满体力
@@ -508,6 +515,7 @@ struct HorseCompetitionState : ActivityState {
     std::atomic<bool> isSettling{false};          // 是否正在结算（等待END_GAME）
     std::atomic<bool> receivedEndGame{false};     // 是否已收到END_GAME命令
     std::atomic<bool> localFinished{false};       // 本地是否已完成（距离=1500）
+    std::atomic<int> phase{HORSE_PHASE_IDLE};     // 主流程阶段
     
     // 玩家数据
     std::atomic<int> cnt{0};                      // 骑乘点数
@@ -515,6 +523,7 @@ struct HorseCompetitionState : ActivityState {
     std::atomic<int> day{0};                      // 天数
     std::atomic<int> resDayPoint{0};              // 剩余每日点数
     std::atomic<int> exchangeNum{0};              // 兑换数量
+    std::atomic<bool> uiInfoReceived{false};      // 是否已收到本轮UI_INFO
     
     // 房间数据
     int roomId = 0;
@@ -531,6 +540,9 @@ struct HorseCompetitionState : ActivityState {
     
     // 兑换限制列表
     std::vector<std::pair<int, int>> exchangeLimits;
+
+    // 赛道事件
+    std::vector<int> itemDistances;               // 从房间数据提取的事件距离
     
     // 游戏数据
     double hp = 1000.0;
@@ -548,6 +560,7 @@ struct HorseCompetitionState : ActivityState {
     // 设置
     std::atomic<bool> useTempMount{true};         // 是否使用临时坐骑
     std::atomic<bool> useItems{false};            // 是否使用道具
+    std::atomic<bool> stopRequested{false};       // 请求在本局结束后停止
     
     void Reset() override {
         ActivityState::Reset();
@@ -557,14 +570,17 @@ struct HorseCompetitionState : ActivityState {
         isSettling = false;
         receivedEndGame = false;
         localFinished = false;
+        phase = HORSE_PHASE_IDLE;
         cnt = 0;
         isRide = 0;
         day = 0;
         resDayPoint = 0;
         exchangeNum = 0;
+        uiInfoReceived = false;
         roomId = 0;
         useTempMount = true;
         useItems = false;
+        stopRequested = false;
         roomStatus = HORSE_ROOM_FREE;
         updateTime = 0.0;
         startTime = 0.0;
@@ -572,6 +588,7 @@ struct HorseCompetitionState : ActivityState {
         otherMembers.clear();
         rankList.clear();
         exchangeLimits.clear();
+        itemDistances.clear();
         hp = 1000.0;
         maxHp = 1000.0;
         speed = 10.0;
@@ -3541,31 +3558,16 @@ BOOL SendHorseGetRegressionPacket(int idx);
 
 
 /**
-
-
-
- * @brief 一键完成坐骑大赛（完整流程）
-
-
-
- * @param useItems 是否使用道具
-
-
-
- * @return 执行是否成功
-
-
-
- */
-
-
-
-/**
  * @brief 一键坐骑大赛完整流程
  * @param useTempMount 是否使用临时坐骑（false=自带坐骑）
  * @return 执行是否成功
  */
 BOOL SendOneKeyHorseCompetitionPacket(bool useTempMount = true);
+
+/**
+ * @brief 请求停止坐骑大赛自动流程（当前局结束后停止）
+ */
+void RequestStopHorseCompetition();
 
 /**
  * @brief 设置坐骑大赛进度回调函数
@@ -3641,28 +3643,10 @@ BOOL StartHorseCompetitionGame();
 
 void StopHorseCompetitionGame();
 
-
-
-
-
-
-
 /**
-
-
-
  * @brief 注册坐骑大赛响应处理器
-
-
-
  */
-
-
-
 void RegisterHorseCompetitionHandlers();
-
-
-
 
 
 

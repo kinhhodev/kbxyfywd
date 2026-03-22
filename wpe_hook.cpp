@@ -19,6 +19,9 @@
 #include <cstdarg>
 #include <thread>
 #include <queue>
+#include <random>
+#include <cctype>
+#include <chrono>
 
 // 第三方库
 #include <MemoryModule.h>
@@ -36,6 +39,8 @@
 #ifndef HORSE_COMPETITION_ACT_ID
 constexpr int HORSE_COMPETITION_ACT_ID = 665;
 #endif
+
+extern bool PostScriptToUI(const std::wstring& jsCode);
 
 // 嵌入资源
 #include "embedded/minhook_data.h"
@@ -69,9 +74,25 @@ bool TryParseUInt32Decimal(const std::string& text, uint32_t& value) {
         return false;
     }
 
+    size_t start = 0;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) {
+        ++start;
+    }
+    if (start >= text.size()) {
+        return false;
+    }
+
     char* end = nullptr;
-    unsigned long parsed = std::strtoul(text.c_str(), &end, 10);
-    if (end == text.c_str() || *end != '\0') {
+    const char* begin = text.c_str() + start;
+    unsigned long parsed = std::strtoul(begin, &end, 10);
+    if (end == begin) {
+        return false;
+    }
+
+    while (*end != '\0' && std::isspace(static_cast<unsigned char>(*end))) {
+        ++end;
+    }
+    if (*end != '\0' && *end != ',' && *end != '}' && *end != ']') {
         return false;
     }
 
@@ -84,9 +105,25 @@ bool TryParseIntDecimal(const std::string& text, int& value) {
         return false;
     }
 
+    size_t start = 0;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) {
+        ++start;
+    }
+    if (start >= text.size()) {
+        return false;
+    }
+
     char* end = nullptr;
-    long parsed = std::strtol(text.c_str(), &end, 10);
-    if (end == text.c_str() || *end != '\0') {
+    const char* begin = text.c_str() + start;
+    long parsed = std::strtol(begin, &end, 10);
+    if (end == begin) {
+        return false;
+    }
+
+    while (*end != '\0' && std::isspace(static_cast<unsigned char>(*end))) {
+        ++end;
+    }
+    if (*end != '\0' && *end != ',' && *end != '}' && *end != ']') {
         return false;
     }
 
@@ -2262,8 +2299,6 @@ void ResponseDispatcher::InitializeDefaultHandlers() {
     registerParams(Opcode::ACTIVITY_QUERY_BACK, Act778::ACTIVITY_ID, ProcessAct778Response);
     registerParams(Opcode::ACTIVITY_QUERY_BACK, Act793::ACTIVITY_ID, ProcessAct793Response);
     registerParams(Opcode::ACTIVITY_QUERY_BACK, Act791::ACTIVITY_ID, ProcessAct791Response);
-
-    registerParams(Opcode::HORSE_COMPETITION_BACK, HORSE_COMPETITION_ACT_ID, ProcessHorseCompetitionResponse);
 
     registerParams(Opcode::HEAVEN_FURUI_BACK, HeavenFurui::ACTIVITY_ID, ProcessHeavenFuruiResponse);
     registerParams(Opcode::ACTIVITY_QUERY_BACK, HeavenFurui::ACTIVITY_ID, ProcessHeavenFuruiResponse);
@@ -8096,6 +8131,22 @@ static void NotifyHorseProgress(const std::wstring& msg) {
     }
 }
 
+void RequestStopHorseCompetition() {
+    auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
+    if (!state.isRunning) {
+        NotifyHorseProgress(L"坐骑大赛当前未在运行");
+        return;
+    }
+
+    state.stopRequested = true;
+    if (state.isGaming) {
+        NotifyHorseProgress(L"已请求停止，当前局完成后将自动停止");
+    }
+    else {
+        NotifyHorseProgress(L"已请求停止，当前流程将尽快结束");
+    }
+}
+
 // 命令常量
 namespace HorseCmd {
     const std::string JOIN_GAME = "join_game";
@@ -8114,6 +8165,107 @@ namespace HorseCmd {
     const std::string GET_REGRESSION = "back_pack_award";
 }
 
+static std::vector<uint8_t> BuildHorsePacketBody(
+    const std::string& operation,
+    const std::vector<int32_t>& bodyValues = {}
+) {
+    std::vector<uint8_t> body;
+
+    const uint16_t cmdLen = static_cast<uint16_t>(operation.length());
+    body.push_back(static_cast<uint8_t>(cmdLen & 0xFF));
+    body.push_back(static_cast<uint8_t>((cmdLen >> 8) & 0xFF));
+    body.insert(body.end(), operation.begin(), operation.end());
+
+    for (int32_t value : bodyValues) {
+        body.push_back(static_cast<uint8_t>(value & 0xFF));
+        body.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+        body.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+        body.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+    }
+
+    return body;
+}
+
+static std::vector<uint8_t> BuildHorsePacketBodyWithJson(
+    const std::string& operation,
+    const std::string& jsonData
+) {
+    std::vector<uint8_t> body = BuildHorsePacketBody(operation);
+    const uint16_t jsonLen = static_cast<uint16_t>(jsonData.length());
+    body.push_back(static_cast<uint8_t>(jsonLen & 0xFF));
+    body.push_back(static_cast<uint8_t>((jsonLen >> 8) & 0xFF));
+    body.insert(body.end(), jsonData.begin(), jsonData.end());
+    return body;
+}
+
+static std::vector<uint8_t> WrapHorsePacketBody(const std::vector<uint8_t>& body, bool useGameCmd) {
+    const uint32_t opcode = useGameCmd ? Opcode::HORSE_GAME_CMD_SEND : Opcode::HORSE_COMPETITION_SEND;
+
+    return PacketBuilder()
+        .SetOpcode(opcode)
+        .SetParams(HORSE_COMPETITION_ACT_ID)
+        .WriteBytes(body)
+        .Build();
+}
+
+static BOOL SendHorsePacketBody(const std::vector<uint8_t>& body, bool useGameCmd) {
+    const std::vector<uint8_t> packet = WrapHorsePacketBody(body, useGameCmd);
+    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+}
+
+static bool ReadHorseJsonPayload(const GamePacket& packet, size_t& offset, std::string& json) {
+    if (offset + 2 > packet.body.size()) {
+        return false;
+    }
+
+    const uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
+    if (offset + jsonLen > packet.body.size()) {
+        return false;
+    }
+
+    json.assign(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
+    offset += jsonLen;
+    return true;
+}
+
+static void SetHorsePhase(HorseCompetitionState& state, HorseCompetitionPhase phase) {
+    state.phase = phase;
+    state.inRoom = (phase == HORSE_PHASE_JOINING_ROOM || phase == HORSE_PHASE_WAITING_START ||
+                    phase == HORSE_PHASE_GAMING || phase == HORSE_PHASE_SETTLING);
+    state.isGaming = (phase == HORSE_PHASE_GAMING);
+    state.isSettling = (phase == HORSE_PHASE_SETTLING);
+    state.isFinished = (phase == HORSE_PHASE_FINISHED);
+}
+
+static void ResetHorseRoundState(HorseCompetitionState& state) {
+    SetHorsePhase(state, HORSE_PHASE_IDLE);
+    state.inRoom = false;
+    state.isGaming = false;
+    state.isFinished = false;
+    state.isSettling = false;
+    state.receivedEndGame = false;
+    state.localFinished = false;
+    state.distance = 0.0;
+    state.syncCount = 0;
+    state.resDayPoint = 0;
+    state.isRide = 0;
+    state.uiInfoReceived = false;
+    state.myInfo.Reset();
+}
+
+static BOOL WaitForHorseFlag(const std::atomic<bool>& flag, DWORD timeoutMs) {
+    const auto start = std::chrono::steady_clock::now();
+    while (!flag.load()) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        if (elapsed > timeoutMs) {
+            return FALSE;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return TRUE;
+}
+
 /**
  * @brief 发送坐骑大赛活动封包（通用）
  */
@@ -8122,55 +8274,7 @@ BOOL SendHorseCompetitionPacket(
     const std::vector<int32_t>& bodyValues,
     bool useGameCmd
 ) {
-    uint32_t opcode = useGameCmd ? Opcode::HORSE_GAME_CMD_SEND : Opcode::HORSE_COMPETITION_SEND;
-    
-    std::vector<uint8_t> body;
-    
-    // 写入命令字符串（小端序长度前缀）
-    uint16_t cmdLen = static_cast<uint16_t>(operation.length());
-    body.push_back(static_cast<uint8_t>(cmdLen & 0xFF));         // 低字节在前
-    body.push_back(static_cast<uint8_t>((cmdLen >> 8) & 0xFF));  // 高字节在后
-    for (char c : operation) {
-        body.push_back(static_cast<uint8_t>(c));
-    }
-    
-    // 写入额外参数（小端序int32）
-    for (int32_t value : bodyValues) {
-        body.push_back(static_cast<uint8_t>(value & 0xFF));
-        body.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
-        body.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
-        body.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
-    }
-    
-    // 构建完整封包
-    std::vector<uint8_t> packet;
-    packet.reserve(PacketProtocol::HEADER_SIZE + body.size());
-    
-    // Magic (2B, 小端序)
-    packet.push_back(0x44);  // 'D'
-    packet.push_back(0x53);  // 'S'
-    
-    // Length (2B, 小端序)
-    uint16_t bodyLen = static_cast<uint16_t>(body.size());
-    packet.push_back(static_cast<uint8_t>(bodyLen & 0xFF));
-    packet.push_back(static_cast<uint8_t>((bodyLen >> 8) & 0xFF));
-    
-    // Opcode (4B, 小端序)
-    packet.push_back(static_cast<uint8_t>(opcode & 0xFF));
-    packet.push_back(static_cast<uint8_t>((opcode >> 8) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((opcode >> 16) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((opcode >> 24) & 0xFF));
-    
-    // Params (4B, 小端序)
-    packet.push_back(static_cast<uint8_t>(HORSE_COMPETITION_ACT_ID & 0xFF));
-    packet.push_back(static_cast<uint8_t>((HORSE_COMPETITION_ACT_ID >> 8) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((HORSE_COMPETITION_ACT_ID >> 16) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((HORSE_COMPETITION_ACT_ID >> 24) & 0xFF));
-    
-    // Body
-    packet.insert(packet.end(), body.begin(), body.end());
-    
-    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    return SendHorsePacketBody(BuildHorsePacketBody(operation, bodyValues), useGameCmd);
 }
 
 BOOL SendHorseJoinGamePacket() {
@@ -8206,56 +8310,8 @@ BOOL SendHorsePlayGamePacket(int distance) {
 }
 
 BOOL SendHorseUseItemPacket(int itemIdx) {
-    std::string jsonData = "{\"item_idx\":" + std::to_string(itemIdx) + "}";
-    
-    std::vector<uint8_t> body;
-    
-    // 写入命令字符串（小端序长度前缀）
-    uint16_t cmdLen = static_cast<uint16_t>(HorseCmd::USE_ITEM.length());
-    body.push_back(static_cast<uint8_t>(cmdLen & 0xFF));
-    body.push_back(static_cast<uint8_t>((cmdLen >> 8) & 0xFF));
-    for (char c : HorseCmd::USE_ITEM) {
-        body.push_back(static_cast<uint8_t>(c));
-    }
-    
-    // 写入JSON数据（小端序长度前缀）
-    uint16_t jsonLen = static_cast<uint16_t>(jsonData.length());
-    body.push_back(static_cast<uint8_t>(jsonLen & 0xFF));
-    body.push_back(static_cast<uint8_t>((jsonLen >> 8) & 0xFF));
-    for (char c : jsonData) {
-        body.push_back(static_cast<uint8_t>(c));
-    }
-    
-    // 构建完整封包
-    std::vector<uint8_t> packet;
-    packet.reserve(PacketProtocol::HEADER_SIZE + body.size());
-    
-    // Magic (2B, 小端序) - "SD"
-    packet.push_back(0x44);
-    packet.push_back(0x53);
-    
-    // Length (2B, 小端序)
-    uint16_t bodyLen = static_cast<uint16_t>(body.size());
-    packet.push_back(static_cast<uint8_t>(bodyLen & 0xFF));
-    packet.push_back(static_cast<uint8_t>((bodyLen >> 8) & 0xFF));
-    
-    // Opcode (4B, 小端序)
-    uint32_t opcode = Opcode::HORSE_GAME_CMD_SEND;
-    packet.push_back(static_cast<uint8_t>(opcode & 0xFF));
-    packet.push_back(static_cast<uint8_t>((opcode >> 8) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((opcode >> 16) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((opcode >> 24) & 0xFF));
-    
-    // Params (4B, 小端序)
-    packet.push_back(static_cast<uint8_t>(HORSE_COMPETITION_ACT_ID & 0xFF));
-    packet.push_back(static_cast<uint8_t>((HORSE_COMPETITION_ACT_ID >> 8) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((HORSE_COMPETITION_ACT_ID >> 16) & 0xFF));
-    packet.push_back(static_cast<uint8_t>((HORSE_COMPETITION_ACT_ID >> 24) & 0xFF));
-    
-    // Body
-    packet.insert(packet.end(), body.begin(), body.end());
-    
-    return SendPacket(0, packet.data(), static_cast<DWORD>(packet.size()));
+    const std::string jsonData = "{\"item_idx\":" + std::to_string(itemIdx) + "}";
+    return SendHorsePacketBody(BuildHorsePacketBodyWithJson(HorseCmd::USE_ITEM, jsonData), true);
 }
 
 BOOL SendHorseGetRegressionPacket(int idx) {
@@ -8265,55 +8321,129 @@ BOOL SendHorseGetRegressionPacket(int idx) {
 // 游戏逻辑
 static void HorseGameMainLoop() {
     auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
-    
-    const auto frameDuration = std::chrono::milliseconds(16);  // 约60fps
+
+    const auto frameDuration = std::chrono::duration<double, std::milli>(1000.0 / 60.0);
     const double AHP = 0.84;
     const double MHP = 3.33;
-    
-    // 目标完成时间 = 35秒
-    const int TARGET_SECONDS = 35;
-    const int TARGET_FRAMES = TARGET_SECONDS * 60;  // 2100帧
-    
+
+    constexpr double kTargetFinishSeconds = 48.0;
+    constexpr int kSyncFrames = HorseCompetitionState::SYNC_INTERVAL;
+    constexpr int kJumpFrames = 18;
+    constexpr int kJumpCooldownFrames = 150;
+
     int frameCount = 0;
-    double lastDistance = 0.0;
+    int accHoldFrames = 0;
+    int accCooldownFrames = 0;
+    int jumpHoldFrames = 0;
+    int jumpCooldownFrames = kJumpCooldownFrames;
+    size_t nextItemIndex = 0;
+    const auto raceStartTime = std::chrono::steady_clock::now();
     
     while (g_horseGameRunning && state.isGaming) {
         auto frameStart = std::chrono::steady_clock::now();
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(frameStart - raceStartTime).count();
+        const double elapsedSeconds = static_cast<double>(elapsedMs) / 1000.0;
+        const double desiredDistance = (std::min)(
+            static_cast<double>(HorseCompetitionState::ROUTE_DISTANCE),
+            HorseCompetitionState::ROUTE_DISTANCE * (elapsedSeconds / kTargetFinishSeconds));
+        const double distanceGap = desiredDistance - state.distance;
         
         frameCount++;
         
         // 更新游戏逻辑
         if (state.canControl) {
-            // 每帧计算应增加的距离，确保35秒完成
-            // 目标: distance / (35 * 60) = 0.714 每帧
-            double distancePerFrame = static_cast<double>(HorseCompetitionState::ROUTE_DISTANCE) / TARGET_FRAMES;
-            
+            if (accCooldownFrames > 0) {
+                --accCooldownFrames;
+            }
+            if (jumpCooldownFrames > 0) {
+                --jumpCooldownFrames;
+            }
+
+            if (jumpHoldFrames > 0) {
+                state.state = "JUMP";
+                --jumpHoldFrames;
+                if (jumpHoldFrames == 0) {
+                    state.state = state.lastState.empty() ? "RUN" : state.lastState;
+                    if (state.state != "ACCRUN") {
+                        state.state = "RUN";
+                    }
+                    jumpCooldownFrames = kJumpCooldownFrames;
+                }
+            }
+            else {
+                bool shouldJumpForItem = false;
+                bool suppressAccForItem = false;
+                if (nextItemIndex < state.itemDistances.size()) {
+                    const int nextItemDistance = state.itemDistances[nextItemIndex];
+                    const double distanceToItem = static_cast<double>(nextItemDistance) - state.distance;
+                    if (distanceToItem < -40.0) {
+                        ++nextItemIndex;
+                    }
+                    else {
+                        shouldJumpForItem = distanceToItem >= 18.0 && distanceToItem <= 42.0;
+                        suppressAccForItem = distanceToItem >= -10.0 && distanceToItem <= 72.0;
+                    }
+                }
+
+                if (state.state == "ACCRUN") {
+                    --accHoldFrames;
+                    if (accHoldFrames <= 0 || state.hp <= state.maxHp * 0.34 || suppressAccForItem || distanceGap < -6.0) {
+                        state.state = "RUN";
+                        accCooldownFrames = 18;
+                    }
+                }
+                else {
+                    state.state = "RUN";
+                    const bool canAccNow = accCooldownFrames <= 0 && state.hp >= state.maxHp * 0.5;
+                    if (canAccNow && !suppressAccForItem && distanceGap > 7.5) {
+                        state.lastState = "RUN";
+                        state.state = "ACCRUN";
+                        accHoldFrames = (distanceGap > 16.0) ? 36 : 18;
+                    }
+                }
+
+                const bool canJumpNow = jumpCooldownFrames <= 0;
+                if (canJumpNow && shouldJumpForItem) {
+                    state.lastState = state.state;
+                    jumpHoldFrames = kJumpFrames;
+                    state.state = "JUMP";
+                    --jumpHoldFrames;
+                    if (jumpHoldFrames <= 0) {
+                        state.state = state.lastState.empty() ? "RUN" : state.lastState;
+                        jumpCooldownFrames = kJumpCooldownFrames;
+                    }
+                }
+            }
+
+            double distanceDelta = 0.0;
             if (state.state == "RUN") {
                 state.hp += AHP;
-                state.distance += distancePerFrame;
+                distanceDelta = state.speed;
             }
             else if (state.state == "ACCRUN") {
                 state.hp -= MHP;
-                state.distance += distancePerFrame;
+                distanceDelta = state.accSpeed;
             }
             else if (state.state == "JUMP") {
-                if (state.lastState == "RUN") {
-                    state.hp += AHP;
-                    state.distance += distancePerFrame;
-                }
-                else if (state.lastState == "ACCRUN") {
+                if (state.lastState == "ACCRUN") {
                     state.hp -= MHP;
-                    state.distance += distancePerFrame;
+                    distanceDelta = state.accSpeed;
+                }
+                else {
+                    state.hp += AHP;
+                    distanceDelta = state.speed;
                 }
             }
+
+            state.distance += distanceDelta;
             
             // 体力限制
             if (state.hp > state.maxHp) state.hp = state.maxHp;
             if (state.hp <= 0) {
                 state.hp = 0;
-                if (state.state != "JUMP") {
-                    state.state = "RUN";
-                }
+                state.state = "RUN";
+                accHoldFrames = 0;
+                accCooldownFrames = 48;
             }
             
             // 检查终点 - 只设置本地完成标志，不立即退出
@@ -8333,9 +8463,9 @@ static void HorseGameMainLoop() {
                 break;
             }
             
-            // 同步进度 (每60帧约1秒)
+            // 同步进度（与 AS3 一致：每 60 帧发送一次）
             state.syncCount++;
-            if (state.syncCount >= HorseCompetitionState::SYNC_INTERVAL) {
+            if (state.syncCount >= kSyncFrames) {
                 state.syncCount = 0;
                 int distToSend = static_cast<int>(state.distance);
                 SendHorsePlayGamePacket(distToSend);
@@ -8382,8 +8512,9 @@ BOOL StartHorseCompetitionGame() {
     state.isDie = false;
     state.syncCount = 0;
     state.items.clear();
-    
-    state.isGaming = true;
+    state.localFinished = false;
+    state.receivedEndGame = false;
+    SetHorsePhase(state, HORSE_PHASE_GAMING);
     g_horseGameRunning = true;
     
     if (g_horseGameThread.joinable()) {
@@ -8402,19 +8533,12 @@ void StopHorseCompetitionGame() {
     
     auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
     state.isGaming = false;
+    if (!state.isFinished) {
+        SetHorsePhase(state, HORSE_PHASE_IDLE);
+    }
 }
 
 // 简化的JSON解析辅助函数
-static std::string ExtractJsonString(const std::string& json, const std::string& key) {
-    size_t pos = json.find("\"" + key + "\":\"");
-    if (pos != std::string::npos) {
-        size_t start = pos + key.length() + 4;
-        size_t end = json.find("\"", start);
-        return json.substr(start, end - start);
-    }
-    return "";
-}
-
 static int ExtractJsonInt(const std::string& json, const std::string& key) {
     size_t pos = json.find("\"" + key + "\":");
     if (pos != std::string::npos) {
@@ -8437,353 +8561,416 @@ static uint32_t ExtractJsonUInt(const std::string& json, const std::string& key)
     return 0;
 }
 
+static std::string ExtractJsonObjectByPlayerId(const std::string& json, uint32_t playerId, int* outRank = nullptr) {
+    const std::string playerIdToken = "\"player_id\":" + std::to_string(playerId);
+    size_t searchPos = 0;
+    int rank = 0;
+
+    while (true) {
+        size_t objectStart = json.find('{', searchPos);
+        if (objectStart == std::string::npos) {
+            break;
+        }
+
+        size_t depthPos = objectStart;
+        int depth = 0;
+        bool inString = false;
+        bool escape = false;
+        size_t objectEnd = std::string::npos;
+
+        while (depthPos < json.size()) {
+            char ch = json[depthPos];
+            if (escape) {
+                escape = false;
+            }
+            else if (ch == '\\') {
+                escape = true;
+            }
+            else if (ch == '"') {
+                inString = !inString;
+            }
+            else if (!inString) {
+                if (ch == '{') {
+                    depth++;
+                }
+                else if (ch == '}') {
+                    depth--;
+                    if (depth == 0) {
+                        objectEnd = depthPos;
+                        break;
+                    }
+                }
+            }
+            depthPos++;
+        }
+
+        if (objectEnd == std::string::npos) {
+            break;
+        }
+
+        rank++;
+        std::string objectJson = json.substr(objectStart, objectEnd - objectStart + 1);
+        if (objectJson.find(playerIdToken) != std::string::npos) {
+            if (outRank) {
+                *outRank = rank;
+            }
+            return objectJson;
+        }
+
+        searchPos = objectEnd + 1;
+    }
+
+    if (outRank) {
+        *outRank = 0;
+    }
+    return "";
+}
+
+static std::vector<int> ExtractItemDistances(const std::string& json) {
+    std::vector<int> distances;
+    size_t itemsPos = json.find("\"items\":[");
+    if (itemsPos == std::string::npos) {
+        return distances;
+    }
+
+    size_t searchPos = itemsPos;
+    while (true) {
+        size_t pos = json.find("\"distance\":", searchPos);
+        if (pos == std::string::npos) {
+            break;
+        }
+        int value = 0;
+        if (TryParseIntDecimal(json.substr(pos + 11), value) && value > 0 && value < HorseCompetitionState::ROUTE_DISTANCE) {
+            distances.push_back(value);
+        }
+        searchPos = pos + 11;
+    }
+
+    std::sort(distances.begin(), distances.end());
+    distances.erase(std::unique(distances.begin(), distances.end()), distances.end());
+    return distances;
+}
+
+static std::wstring MakeJsonPreview(const std::string& json, size_t maxLen = 220) {
+    std::wstring preview(json.begin(), json.end());
+    if (preview.size() > maxLen) {
+        preview = preview.substr(0, maxLen) + L"...";
+    }
+    return preview;
+}
+
+static void ApplyHorseRoomStateFromJson(HorseCompetitionState& state, const std::string& json) {
+    state.roomId = ExtractJsonInt(json, "id");
+    state.roomStatus = ExtractJsonInt(json, "status");
+    state.updateTime = static_cast<double>(ExtractJsonInt(json, "update_time"));
+    state.startTime = static_cast<double>(ExtractJsonInt(json, "start_time"));
+}
+
+static void HandleHorseRoomInfoResponse(HorseCompetitionState& state, const std::string& json) {
+    ApplyHorseRoomStateFromJson(state, json);
+    state.inRoom = true;
+    if (state.phase < HORSE_PHASE_GAMING) {
+        SetHorsePhase(state, HORSE_PHASE_WAITING_START);
+    }
+
+    const size_t membersPos = json.find("\"members\":");
+    if (membersPos != std::string::npos) {
+        state.otherMembers.clear();
+    }
+}
+
+static void HandleHorseStartGameResponse(HorseCompetitionState& state, const std::string& json) {
+    ApplyHorseRoomStateFromJson(state, json);
+    if (!state.isGaming) {
+        StartHorseCompetitionGame();
+    }
+}
+
+static void HandleHorseJoinGameResponse(HorseCompetitionState& state, const std::string& json) {
+    const size_t horseInfoPos = json.find("\"horse_info\":");
+    if (horseInfoPos != std::string::npos) {
+        const std::string horseInfoJson = json.substr(horseInfoPos);
+        state.myInfo.horse_base_Hp = ExtractJsonInt(horseInfoJson, "base_power");
+        state.myInfo.horse_base_speed = ExtractJsonInt(horseInfoJson, "base_speed");
+        state.myInfo.horse_base_intimate = ExtractJsonInt(horseInfoJson, "base_intimate");
+    }
+
+    state.itemDistances = ExtractItemDistances(json);
+    state.inRoom = true;
+    SetHorsePhase(state, HORSE_PHASE_WAITING_START);
+}
+
+static void HandleHorseReadyResponse(HorseCompetitionState& state, const std::string& json) {
+    const uint32_t playerId = ExtractJsonUInt(json, "player_id");
+    if (playerId == g_userId.load()) {
+        state.myInfo.status = HORSE_ROOM_READY;
+    }
+}
+
+static void HandleHorseRoomStatusResponse(HorseCompetitionState& state, const std::string& json) {
+    ApplyHorseRoomStateFromJson(state, json);
+
+    if (state.roomStatus == HORSE_ROOM_READY) {
+        state.myInfo.status = HORSE_ROOM_READY;
+    }
+    else if (state.roomStatus == HORSE_ROOM_SETTLE) {
+        SetHorsePhase(state, HORSE_PHASE_SETTLING);
+    }
+}
+
+static void HandleHorseUiInfoResponse(HorseCompetitionState& state, const GamePacket& packet, size_t& offset) {
+    if (offset + 20 > packet.body.size()) {
+        return;
+    }
+
+    state.cnt = ReadInt32LE(packet.body.data(), offset);
+    state.isRide = ReadInt32LE(packet.body.data(), offset);
+    state.day = ReadInt32LE(packet.body.data(), offset);
+    state.resDayPoint = ReadInt32LE(packet.body.data(), offset);
+    state.uiInfoReceived = true;
+
+    PostScriptToUI(
+        L"if(window.updateHorseCompetitionPoints) { window.updateHorseCompetitionPoints('" +
+        std::to_wstring(state.resDayPoint.load()) +
+        L"'); }"
+    );
+}
+
+static void HandleHorseEndGameResponse(HorseCompetitionState& state, const GamePacket& packet, size_t& offset) {
+    if (offset + 12 > packet.body.size()) {
+        return;
+    }
+
+    const int result = ReadInt32LE(packet.body.data(), offset);
+    ReadInt32LE(packet.body.data(), offset);
+    ReadInt32LE(packet.body.data(), offset);
+
+    if (result != 0) {
+        NotifyHorseProgress(L"游戏结束，但结果异常");
+        return;
+    }
+
+    std::string rankListJson;
+    if (ReadHorseJsonPayload(packet, offset, rankListJson)) {
+        int myRank = 0;
+        const std::string myRankJson = ExtractJsonObjectByPlayerId(rankListJson, g_userId.load(), &myRank);
+
+        if (!myRankJson.empty()) {
+            const int myPoint = ExtractJsonInt(myRankJson, "point");
+            const int myCostTime = ExtractJsonInt(myRankJson, "cost_time");
+            const int myHorseIid = ExtractJsonInt(myRankJson, "iid");
+            state.myInfo.rank = myRank;
+            if (myCostTime > 0) {
+                state.myInfo.cost_time = myCostTime;
+            }
+
+            std::wstring msg = L"游戏结束！排名第" + std::to_wstring(myRank) +
+                L"，point=" + std::to_wstring(myPoint);
+            if (myCostTime > 0) {
+                msg += L"，用时=" + std::to_wstring(myCostTime) + L"秒";
+            }
+            if (myHorseIid > 0) {
+                msg += L"，坐骑IID=" + std::to_wstring(myHorseIid);
+            }
+            NotifyHorseProgress(msg);
+        }
+        else {
+            NotifyHorseProgress(L"游戏结束！未在排名列表中找到自己，原始排名=" + MakeJsonPreview(rankListJson, 180));
+        }
+    }
+
+    state.receivedEndGame = true;
+    SetHorsePhase(state, HORSE_PHASE_FINISHED);
+    state.isSettling = false;
+    state.isFinished = false;
+}
+
+static void HandleHorseSyncMemberResponse(HorseCompetitionState& state, const std::string& json) {
+    const uint32_t playerId = ExtractJsonUInt(json, "player_id");
+    const int costTime = ExtractJsonInt(json, "cost_time");
+    if (playerId == g_userId.load()) {
+        state.myInfo.cost_time = costTime;
+    }
+}
+
 // 响应处理
 void ProcessHorseCompetitionResponse(const GamePacket& packet) {
     if (packet.body.size() < 4) return;
-    
+
     auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
-    
+
     size_t offset = 0;
-    // 小端序读取命令字符串长度
     uint16_t cmdLen = ReadUInt16LE(packet.body.data(), offset);
     if (offset + cmdLen > packet.body.size()) return;
     std::string cmd(reinterpret_cast<const char*>(packet.body.data() + offset), cmdLen);
     offset += cmdLen;
-    
+
+    std::string json;
     if (cmd == HorseCmd::ROOM_INFO) {
-        if (offset + 2 <= packet.body.size()) {
-            // 小端序读取JSON长度
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                
-                state.roomId = ExtractJsonInt(json, "id");
-                int newStatus = ExtractJsonInt(json, "status");
-                state.roomStatus = newStatus;
-                
-                // 解析成员列表
-                size_t membersPos = json.find("\"members\":");
-                if (membersPos != std::string::npos) {
-                    state.otherMembers.clear();
-                    // 简化的成员解析
-                }
-                
-                state.inRoom = true;
-            }
+        if (ReadHorseJsonPayload(packet, offset, json)) {
+            HandleHorseRoomInfoResponse(state, json);
         }
     }
     else if (cmd == HorseCmd::START_GAME) {
-        // START_GAME 是正式开始游戏的信号
-        if (offset + 2 <= packet.body.size()) {
-            // 小端序读取JSON长度
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                
-                state.roomId = ExtractJsonInt(json, "id");
-                int newStatus = ExtractJsonInt(json, "status");
-                state.roomStatus = newStatus;
-                
-                // 直接启动游戏，不再检查 status
-                if (!state.isGaming) {
-                    StartHorseCompetitionGame();
-                }
-            }
+        if (ReadHorseJsonPayload(packet, offset, json)) {
+            HandleHorseStartGameResponse(state, json);
         }
     }
     else if (cmd == HorseCmd::JOIN_GAME) {
-        if (offset + 2 <= packet.body.size()) {
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                
-                // 解析 horse_info 对象
-                size_t horseInfoPos = json.find("\"horse_info\":");
-                if (horseInfoPos != std::string::npos) {
-                    std::string horseInfoJson = json.substr(horseInfoPos);
-                    state.myInfo.horse_base_Hp = ExtractJsonInt(horseInfoJson, "base_power");
-                    state.myInfo.horse_base_speed = ExtractJsonInt(horseInfoJson, "base_speed");
-                    state.myInfo.horse_base_intimate = ExtractJsonInt(horseInfoJson, "base_intimate");
-                }
-            }
+        if (ReadHorseJsonPayload(packet, offset, json)) {
+            HandleHorseJoinGameResponse(state, json);
         }
-        state.inRoom = true;
     }
     else if (cmd == HorseCmd::READY) {
-        if (offset + 2 <= packet.body.size()) {
-            // 小端序读取JSON长度
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                uint32_t playerId = ExtractJsonUInt(json, "player_id");
-                if (playerId == g_userId.load()) {
-                    state.myInfo.status = HORSE_ROOM_READY;
-                }
-            }
+        if (ReadHorseJsonPayload(packet, offset, json)) {
+            HandleHorseReadyResponse(state, json);
         }
     }
     else if (cmd == HorseCmd::ROOM_STATUS) {
-        if (offset + 2 <= packet.body.size()) {
-            // 小端序读取JSON长度
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                int newStatus = ExtractJsonInt(json, "status");
-                state.roomStatus = newStatus;
-                
-                if (newStatus == HORSE_ROOM_GAMESTART || newStatus == HORSE_ROOM_INGAME) {
-                    // 游戏开始
-                    if (!state.isGaming) {
-                        StartHorseCompetitionGame();
-                    }
-                }
-                else if (newStatus == HORSE_ROOM_SETTLE) {
-                    // 游戏结算 - 服务器通知游戏即将结束，但需要等待 END_GAME 命令才能真正完成
-                    state.isSettling = true;  // 新增: 正在结算状态
-                    // 不立即停止游戏，等待 END_GAME 命令
-                }
-            }
+        if (ReadHorseJsonPayload(packet, offset, json)) {
+            HandleHorseRoomStatusResponse(state, json);
         }
     }
     else if (cmd == HorseCmd::UI_INFO) {
-        // UI_INFO 格式: cnt(4) + is_ride(4) + day(4) + res_day_point(4) + flag数组长度(4) + flag数组
-        if (offset + 20 <= packet.body.size()) {
-            state.cnt = ReadInt32LE(packet.body.data(), offset);
-            state.isRide = ReadInt32LE(packet.body.data(), offset);
-            state.day = ReadInt32LE(packet.body.data(), offset);
-            state.resDayPoint = ReadInt32LE(packet.body.data(), offset);
-        }
+        HandleHorseUiInfoResponse(state, packet, offset);
     }
     else if (cmd == HorseCmd::END_GAME) {
-        // END_GAME 格式: result(4) + ?(4) + ?(4) + rankList(JSON, len+str)
-        if (offset + 12 <= packet.body.size()) {
-            int result = ReadInt32LE(packet.body.data(), offset);
-            int unknown1 = ReadInt32LE(packet.body.data(), offset);  // 跳过
-            int unknown2 = ReadInt32LE(packet.body.data(), offset);  // 跳过
-            
-            if (result == 0) {
-                // 解析 rankList JSON
-                if (offset + 2 <= packet.body.size()) {
-                    uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-                    if (offset + jsonLen <= packet.body.size()) {
-                        std::string rankListJson(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                        
-                        // 解析排名信息
-                        int myPoint = ExtractJsonInt(rankListJson, "point");
-                        int myRank = ExtractJsonInt(rankListJson, "rank");
-                        
-                        // 查找自己的玩家信息
-                        size_t myPos = rankListJson.find(std::to_string(g_userId.load()));
-                        
-                        NotifyHorseProgress(L"游戏结束！排名数据已接收");
-                    }
-                }
-                
-                // 设置游戏结束标志
-                state.receivedEndGame = true;
-                state.isSettling = false;
-            } else {
-                NotifyHorseProgress(L"游戏结束，但结果异常");
-            }
-        }
+        HandleHorseEndGameResponse(state, packet, offset);
     }
     else if (cmd == HorseCmd::PLAY_GAME) {
-        // 进度同步，更新其他玩家距离
-        if (offset + 2 <= packet.body.size()) {
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                int distance = ExtractJsonInt(json, "distance");
-                uint32_t playerId = ExtractJsonUInt(json, "player_id");
-            }
-        }
     }
     else if (cmd == HorseCmd::SYNC_MEMBER) {
-        // 同步成员完成信息（包含 cost_time）
-        if (offset + 2 <= packet.body.size()) {
-            uint16_t jsonLen = ReadUInt16LE(packet.body.data(), offset);
-            if (offset + jsonLen <= packet.body.size()) {
-                std::string json(reinterpret_cast<const char*>(packet.body.data() + offset), jsonLen);
-                
-                // 提取 player_id 和 cost_time
-                uint32_t playerId = ExtractJsonUInt(json, "player_id");
-                int costTime = ExtractJsonInt(json, "cost_time");
-                
-                // 如果是自己的信息，更新状态
-                if (playerId == g_userId.load()) {
-                    state.myInfo.cost_time = costTime;
-                    NotifyHorseProgress(L"游戏完成时间: " + std::to_wstring(costTime) + L"秒");
-                }
-            }
+        if (ReadHorseJsonPayload(packet, offset, json)) {
+            HandleHorseSyncMemberResponse(state, json);
         }
     }
-    
+
     state.waitingResponse = false;
 }
 
-// 等待函数
-static BOOL WaitForHorseRoomStatus(int expectedStatus, DWORD timeoutMs) {
-    auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
-    auto start = std::chrono::steady_clock::now();
-    
-    while (state.roomStatus != expectedStatus) {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-        if (elapsed > timeoutMs) return FALSE;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    return TRUE;
-}
-
-static BOOL WaitForHorseGameEnd(DWORD timeoutMs) {
-    auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
-    auto start = std::chrono::steady_clock::now();
-    
-    while (!state.isFinished) {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-        if (elapsed > timeoutMs) return FALSE;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    return TRUE;
-}
-
-// 一键完成
 BOOL SendOneKeyHorseCompetitionPacket(bool useTempMount) {
     auto& state = ActivityStateManager::Instance().GetHorseCompetitionState();
-    
+
+    if (state.isRunning) {
+        NotifyHorseProgress(L"坐骑大赛正在运行中，请勿重复启动");
+        return FALSE;
+    }
+
     state.Reset();
     state.isRunning = true;
     state.useTempMount = useTempMount;
-    
-    NotifyHorseProgress(L"正在获取活动信息...");
-    
-    // 1. 发送 UI_INFO 并等待响应
-    SendHorseUIInfoPacket();
-    
-    // 等待 UI_INFO 响应（通过检查 resDayPoint 是否被设置）
-    int wait_count = 0;
-    while (state.resDayPoint == 0 && wait_count < 50) {  // 最多等待5秒
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        wait_count++;
-    }
-    
-    // 检查是否还有游戏次数
-    if (state.resDayPoint <= 0) {
-        NotifyHorseProgress(L"获取活动信息失败或今日次数已用完");
-        state.isRunning = false;
-        return FALSE;
-    }
-    
-    NotifyHorseProgress(L"活动信息获取成功，剩余点数: " + std::to_wstring(state.resDayPoint.load()));
-    
-    // 2. 检查坐骑状态
-    // isRide > 0: 有坐骑，直接加入
-    // isRide == 0: 无坐骑，自动使用临时坐骑
-    if (state.isRide == 0 && !useTempMount) {
-        NotifyHorseProgress(L"未检测到坐骑，自动使用临时坐骑");
-        useTempMount = true;
-        state.useTempMount = true;
-    }
-    
-    NotifyHorseProgress(L"正在加入游戏房间...");
-    
-    // 3. 发送 JOIN_GAME
-    SendHorseJoinGamePacket();
-    
-    // 等待加入房间响应（通过 inRoom 标志）
-    wait_count = 0;
-    while (!state.inRoom && wait_count < 100) {  // 最多等待10秒
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        wait_count++;
-    }
-    if (!state.inRoom) {
-        NotifyHorseProgress(L"加入房间超时");
-        state.isRunning = false;
-        return FALSE;
-    }
-    
-    NotifyHorseProgress(L"成功加入房间，正在准备...");
-    
-    // 4. 发送准备
-    SendHorseReadyPacket();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    
-    NotifyHorseProgress(L"已准备，等待游戏开始...");
-    
-    // 5. 等待游戏开始（等待 isGaming 标志）
-    wait_count = 0;
-    while (!state.isGaming && wait_count < 300) {  // 最多等待30秒
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        wait_count++;
-    }
-    
-    if (!state.isGaming) {
-        NotifyHorseProgress(L"等待游戏开始超时（需要其他玩家准备）");
-        SendHorseExitRoomPacket();
-        state.isRunning = false;
-        return FALSE;
-    }
-    
-    NotifyHorseProgress(L"游戏开始！正在比赛中...");
-    
-    // 6. 等待游戏结束（由 HorseGameMainLoop 自动处理进度发送）
-    wait_count = 0;
-    bool settlingNotified = false;
-    bool localFinishNotified = false;
-    while (!state.isFinished && wait_count < 1800) {  // 最多等待180秒（3分钟）
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        wait_count++;
-        
-        // 检测本地完成
-        if (state.localFinished && !localFinishNotified) {
-            localFinishNotified = true;
-            NotifyHorseProgress(L"比赛已完成，等待服务器确认...");
+    state.stopRequested = false;
+
+    while (true) {
+        ResetHorseRoundState(state);
+
+        SetHorsePhase(state, HORSE_PHASE_FETCHING_UI_INFO);
+
+        NotifyHorseProgress(L"正在获取活动信息...");
+        SendHorseUIInfoPacket();
+
+        if (!WaitForHorseFlag(state.uiInfoReceived, 5000)) {
+            NotifyHorseProgress(L"获取活动信息超时");
+            state.isRunning = false;
+            return FALSE;
         }
-        
-        // 检测 SETTLE 状态
-        if (state.isSettling && !settlingNotified) {
-            settlingNotified = true;
-            NotifyHorseProgress(L"游戏即将结束，等待服务器结算...");
+
+        if (state.resDayPoint <= 0) {
+            NotifyHorseProgress(L"坐骑大赛已完成：今日骑乘点已刷满");
+            state.isRunning = false;
+            return TRUE;
         }
-        
-        // 检测 END_GAME 收到
-        if (state.receivedEndGame) {
-            NotifyHorseProgress(L"服务器已确认，游戏即将完成...");
+
+        if (state.stopRequested) {
+            NotifyHorseProgress(L"坐骑大赛已停止");
+            state.isRunning = false;
+            return TRUE;
         }
-        
-        // 每10秒更新一次进度
-        if (wait_count % 100 == 0) {
-            int progress = static_cast<int>(state.distance * 100 / 1500);
-            if (!state.localFinished) {
-                NotifyHorseProgress(L"比赛进行中... 进度: " + std::to_wstring(progress) + L"%");
-            } else if (!state.receivedEndGame) {
-                NotifyHorseProgress(L"等待服务器确认... (进度: " + std::to_wstring(progress) + L"%)");
+
+        NotifyHorseProgress(L"活动信息获取成功，剩余点数: " + std::to_wstring(state.resDayPoint.load()));
+        NotifyHorseProgress(L"正在加入游戏房间...");
+
+        SetHorsePhase(state, HORSE_PHASE_JOINING_ROOM);
+        SendHorseJoinGamePacket();
+
+        if (!WaitForHorseFlag(state.inRoom, 10000)) {
+            NotifyHorseProgress(L"加入房间超时");
+            state.isRunning = false;
+            return FALSE;
+        }
+
+        NotifyHorseProgress(L"成功加入房间，正在准备...");
+        SendHorseReadyPacket();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        NotifyHorseProgress(L"已准备，等待游戏开始...");
+        SetHorsePhase(state, HORSE_PHASE_WAITING_START);
+
+        if (!WaitForHorseFlag(state.isGaming, 30000)) {
+            NotifyHorseProgress(L"等待游戏开始超时（需要其他玩家准备）");
+            SendHorseExitRoomPacket();
+            state.isRunning = false;
+            return FALSE;
+        }
+
+        NotifyHorseProgress(L"游戏开始！正在比赛中...");
+
+        int wait_count = 0;
+        bool settlingNotified = false;
+        bool localFinishNotified = false;
+        bool endGameNotified = false;
+        while (!state.isFinished && wait_count < 1800) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            wait_count++;
+
+            if (state.localFinished && !localFinishNotified) {
+                localFinishNotified = true;
+                NotifyHorseProgress(L"比赛已完成，等待服务器确认...");
+            }
+
+            if (state.isSettling && !settlingNotified) {
+                settlingNotified = true;
+                NotifyHorseProgress(L"游戏即将结束，等待服务器结算...");
+            }
+
+            if (state.receivedEndGame && !endGameNotified) {
+                endGameNotified = true;
+                NotifyHorseProgress(L"服务器已确认，游戏即将完成...");
+            }
+
+            if (wait_count % 100 == 0) {
+                int progress = static_cast<int>(state.distance * 100 / 1500);
+                if (!state.localFinished) {
+                    NotifyHorseProgress(L"比赛进行中... 进度: " + std::to_wstring(progress) + L"%");
+                } else if (!state.receivedEndGame) {
+                    NotifyHorseProgress(L"等待服务器确认... (进度: " + std::to_wstring(progress) + L"%)");
+                }
             }
         }
-    }
-    
-    if (!state.isFinished) {
-        NotifyHorseProgress(L"等待游戏结束超时");
-        StopHorseCompetitionGame();
+
+        if (!state.isFinished) {
+            NotifyHorseProgress(L"等待游戏结束超时");
+            StopHorseCompetitionGame();
+            SendHorseExitRoomPacket();
+            state.isRunning = false;
+            return FALSE;
+        }
+
+        NotifyHorseProgress(L"比赛完成！正在退出...");
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
         SendHorseExitRoomPacket();
-        state.isRunning = false;
-        return FALSE;
+        state.inRoom = false;
+
+        if (state.stopRequested) {
+            NotifyHorseProgress(L"坐骑大赛已按请求停止");
+            state.isRunning = false;
+            state.stopRequested = false;
+            return TRUE;
+        }
+
+        NotifyHorseProgress(L"本局完成，准备继续刷取剩余骑乘点...");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
     }
-    
-    NotifyHorseProgress(L"比赛完成！正在退出...");
-    
-    // 7. 等待结算完成
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    
-    // 8. 退出房间
-    SendHorseExitRoomPacket();
-    
-    state.isRunning = false;
-    state.inRoom = false;
-    
-    NotifyHorseProgress(L"坐骑大赛已完成！");
-    return TRUE;
 }
 
 void RegisterHorseCompetitionHandlers() {
