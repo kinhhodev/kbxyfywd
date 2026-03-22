@@ -6,8 +6,6 @@
  */
 
 #include "ui_bridge.h"
-#include <cstdarg>
-#include <sstream>
 
 // Windows 自定义消息
 #define WM_EXECUTE_JS (WM_USER + 101)
@@ -101,16 +99,6 @@ void UIBridge::ExecuteJS(const std::wstring& script) {
     }
 }
 
-void UIBridge::CallJSFunction(const std::wstring& funcName, const std::wstring& args) {
-    std::wstring script = L"if(window." + funcName + L") { window." + funcName + L"(" + args + L"); }";
-    ExecuteJS(script);
-}
-
-void UIBridge::CallJSFunctionWithCheck(const std::wstring& funcName, const std::wstring& args) {
-    std::wstring script = L"if(typeof window." + funcName + L" === 'function') { window." + funcName + L"(" + args + L"); }";
-    ExecuteJS(script);
-}
-
 // ============================================================================
 // 辅助方法
 // ============================================================================
@@ -140,27 +128,5 @@ std::wstring UIBridge::EscapeJsonString(const std::wstring& input) {
                 break;
         }
     }
-    return result;
-}
-
-std::wstring UIBridge::FormatString(const wchar_t* format, ...) {
-    if (!format) return L"";
-
-    va_list args;
-    va_start(args, format);
-
-    // 计算所需长度
-    int len = _vscwprintf(format, args);
-    if (len <= 0) {
-        va_end(args);
-        return L"";
-    }
-
-    // 分配缓冲区
-    std::wstring result(len + 1, L'\0');
-    vswprintf_s(&result[0], result.length(), format, args);
-    result.resize(len);  // 移除末尾的 null
-
-    va_end(args);
     return result;
 }

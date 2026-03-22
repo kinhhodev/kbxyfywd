@@ -1,124 +1,176 @@
-# AGENTS.md - 卡布西游微端项目指南
+# AGENTS.md - kbwebui repository guide
 
-> **项目**: 基于 WebView2 的 Windows 桌面游戏辅助工具 (浮影微端 V1.04)
-> **仓库**: https://github.com/lllcc666/kbxyfywd
+## Purpose
 
-## 技术栈
+- This repository builds a Windows desktop helper for the game using Win32 C++17, WebView2, ATL/WebBrowser, MinHook, and embedded assets.
+- The main executable target is `WebView2Demo` defined in `CMakeLists.txt`.
+- Agentic tools should prefer minimal, focused edits and preserve existing Chinese UI text, protocol constants, and Windows-specific behavior.
 
-| 组件 | 技术 |
-|------|------|
-| 语言 | C++17 (Win32) |
-| UI | WebView2 + HTML/CSS/JS |
-| 游戏嵌入 | WebBrowser (IE/ATL CAxWindow) |
-| 构建 | CMake 3.16+ |
-| 包管理 | vcpkg |
-| Hook | MinHook |
-| 压缩 | zlib + minizip |
-| 平台 | Windows x64 |
+## Rule sources checked
 
-## 构建命令
+- Existing repo guidance was already present in this file and has been expanded.
+- No `.cursor/rules/` directory was found.
+- No `.cursorrules` file was found.
+- No `.github/copilot-instructions.md` file was found.
+- If any of those files are added later, treat them as higher-priority repository instructions and merge them into future edits.
+
+## Tech stack
+
+- Language: C++17 with MSVC.
+- App model: Win32 desktop app with a `WIN32` executable target.
+- UI: WebView2 hosting HTML/CSS/JavaScript from `resources/ui.html`, embedded into headers at build time.
+- Embedded browser/game host: ATL `CAxWindow` + `IWebBrowser2`.
+- Hooking: MinHook plus custom socket/game packet interception.
+- Compression/loading: zlib and MemoryModule.
+- Helper scripts: Python 3 scripts under `scripts/` generate embedded headers.
+
+## Important paths
+
+- `CMakeLists.txt`: build definition, compiler flags, linked libs, embedded-header generation.
+- `demo.cpp`: application entry, window lifecycle, WebView2 setup, global state, UI bridge wiring.
+- `wpe_hook.h` / `wpe_hook.cpp`: hook lifecycle, packet interception, response dispatch, automation logic.
+- `packet_parser.h` / `packet_parser.cpp`: protocol constants, packet parsing, opcode definitions.
+- `packet_builder.h` / `packet_builder.cpp`: chainable packet construction helpers.
+- `ui_bridge.h` / `ui_bridge.cpp`: C++ to JavaScript bridge.
+- `web_message_handler.cpp`: JavaScript to native message handling.
+- `data_interceptor.cpp`: HTTP response interception/modification.
+- `resources/ui.html`: main frontend UI source.
+- `embedded/*.h`: generated binary/header assets; treat as build artifacts unless the task is specifically about generated output.
+- `scripts/embed_dll.py`, `scripts/embed_html.py`: generate embedded headers consumed by the C++ target.
+
+## Build commands
+
+Use PowerShell or `cmd.exe` on Windows from the repo root.
 
 ```powershell
-# 首次构建
-mkdir build_new && cd build_new
-cmake .. -G "Visual Studio 17 2022" -A x64
-cmake --build . --config Release
+# Configure a fresh build directory
+cmake -S . -B build_new -G "Visual Studio 17 2022" -A x64
 
-# 增量构建
+# Build Release
 cmake --build build_new --config Release
 
-# 运行
+# Build Debug
+cmake --build build_new --config Debug
+
+# Run the app
 .\build_new\bin\Release\WebView2Demo.exe
 ```
 
-**注意**: vcpkg 路径在 `CMakeLists.txt:30` 硬编码为 `d:/AItrace/CE/.trae/vcpkg-master`
+Notes:
 
-## 项目结构
+- `CMakeLists.txt` hardcodes `VCPKG_ROOT` to `d:/AItrace/CE/.trae/vcpkg-master`; builds may fail on machines where that path does not exist.
+- Build generation depends on Python 3 being available as `python3` because custom commands invoke `python3 scripts/embed_dll.py` and `python3 scripts/embed_html.py`.
+- The build emits generated headers into `embedded/` for WebView2Loader, zlib, and UI HTML.
 
-```
-kbwebui/
-├── demo.cpp                 # 主窗口、WebView2 初始化、消息循环
-├── wpe_hook.h/cpp           # 网络封包拦截、发送、响应等待
-├── packet_parser.h/cpp      # 封包解析、Opcode 定义、数据结构
-├── packet_builder.h/cpp     # 封包构建器（链式调用）
-├── ui_bridge.h/cpp          # C++ ↔ JavaScript 通信桥梁
-├── data_interceptor.h/cpp   # HTTP 响应拦截修改
-├── utils.h/cpp              # 编码转换、线程同步、远程下载
-├── resources/               # 图标、资源脚本、ui.html
-├── embedded/                # 自动生成的嵌入数据头文件
-├── data/                    # 游戏数据 XML 缓存
-└── scripts/                 # Python 工具脚本
-```
+## Lint and formatting commands
 
-## 封包协议
+- There is no configured repo-wide lint target in `CMakeLists.txt`.
+- There is no `.clang-format`, `.editorconfig`, `clang-tidy`, or cpplint configuration checked in.
+- There is no dedicated `format` or `lint` script.
+- If formatting is needed, keep edits consistent with surrounding code rather than reformatting files wholesale.
+- If you introduce local validation commands, prefer non-destructive spot checks such as `cmake --build build_new --config Release` on the touched code.
 
-```
-┌──────────┬──────────┬──────────┬──────────┬──────────┐
-│ Magic 2B │ Len 2B   │Opcode 4B │Params 4B │Body 变长 │
-└──────────┴──────────┴──────────┴──────────┴──────────┘
-```
+## Test commands
 
-- **Magic**: `0x5344` 普通包, `0x5343` 压缩包
-- **所有数值**: 小端序
-- **Opcode 计算**: `byte[0] | (byte[1]<<8) | (byte[2]<<16) | (byte[3]<<24)`
+- There is currently no test framework configured in CMake.
+- No `enable_testing()`, `add_test(...)`, GoogleTest, Catch2, or standalone test directories were found.
+- `ctest` is therefore not expected to run meaningful tests in the current repository state.
+- The practical validation path is to build the target and manually verify the affected workflow in the Windows app.
 
-## 代码风格
+## Single-test guidance
 
-### 命名约定
+- There are no automated unit/integration tests to run individually today.
+- For an agent asked to "run a single test," explain that no formal test target exists and use the narrowest available validation instead.
+- Preferred narrow validation options:
+  - rebuild only: `cmake --build build_new --config Release`
+  - if a future test target is added, run `ctest -N` first to discover names, then `ctest -R <name> --output-on-failure`
+  - for script-only changes, run the specific Python script directly with representative arguments where safe
 
-| 类型 | 风格 | 示例 |
-|------|------|------|
-| 类/函数 | `PascalCase` | `PacketBuilder`, `SendPacket()` |
-| 变量 | `camelCase` | `gameData`, `isRunning` |
-| 全局变量 | `g_` 前缀 | `g_hWnd`, `g_webview` |
-| 常量 | `UPPER_SNAKE_CASE` | `HEADER_SIZE`, `TIMEOUT_NORMAL` |
-| 命名空间 | `PascalCase` | `Opcode`, `PacketProtocol` |
+## Runtime validation suggestions
 
-### 代码规范
+- Launch `build_new/bin/Release/WebView2Demo.exe` after relevant UI/native changes.
+- Verify WebView2 UI still loads and that embedded `resources/ui.html` changes propagated to `embedded/ui_html.h` through the build.
+- Verify hook-related changes against the in-app workflow rather than assuming compile success proves correctness.
+- Be careful with live game/network automation behavior; prefer isolated validation when possible.
 
-- **标准**: C++17, MSVC `/utf-8`
-- **字符串**: 中文用 `std::wstring`, 英文用 `std::string`
-- **线程同步**: RAII 风格 `CriticalSectionLock`
-- **头文件**: `#pragma once`, Doxygen 注释
-- **导入顺序**: Windows API → 标准库 → 第三方库 → 项目头文件
+## Code style
 
-### 封包构建示例
+### Includes and dependencies
 
-```cpp
-auto packet = PacketBuilder()
-    .SetOpcode(1185429)
-    .SetParams(770)
-    .WriteString("game_info")
-    .Build();
-```
+- Follow the established include order: Windows/COM headers first, then standard library headers, then third-party headers, then project headers.
+- Prefer `#pragma once` in headers.
+- Keep header dependencies narrow; forward declare when practical, especially for COM or project types.
+- Do not add new external dependencies unless the task explicitly requires them.
 
-## 添加新功能
+### Formatting
 
-1. `packet_parser.h` → 定义 Opcode 常量
-2. `wpe_hook.h` → 添加状态结构（如需要）
-3. `wpe_hook.cpp` → 实现发送函数
-4. `ResponseDispatcher::InitializeDefaultHandlers()` → 注册响应处理器
-5. `demo.cpp` → 添加 JavaScript 调用入口
+- Match the existing style in each file rather than enforcing a new global format.
+- Use 4-space indentation in C++ source/header files.
+- Keep braces and wrapping consistent with nearby code; the codebase mixes compact Win32-style and documented class-style declarations.
+- Preserve existing Chinese comments and user-facing strings unless the task is to revise them.
+- Avoid broad cleanup-only diffs.
 
-## 调试
+### Naming conventions
 
-- **仅用 WebView2 控制台输出**，无 debug 模式
-- 使用封包拦截对比客户端发送的封包
-- 注意 UTF-8 编码问题
+- Classes and major functions use `PascalCase`, for example `PacketBuilder`, `InitializeHooks`, `CreateWebMessageHandler`.
+- Local variables and parameters use `camelCase`.
+- Global variables use the `g_` prefix, for example `g_hWnd`, `g_webview`, `g_speedhackModule`.
+- Namespaces use `PascalCase`, for example `Opcode`, `PacketProtocol`, `WpeHook`.
+- Constants use `UPPER_SNAKE_CASE` for macros and `constexpr` values, for example `HEADER_SIZE`, `TIMEOUT_RESPONSE`, `WM_EXECUTE_JS`.
+- Typedef-style Windows aliases such as `PACKET`, `BOOL`, `DWORD`, and callback typedefs are already part of the codebase; preserve consistency when editing adjacent code.
 
-## 版本号更新清单
+### Types and APIs
 
-发布时同步更新：
+- Target C++17; avoid using features that require a newer standard unless CMake is updated too.
+- This is a Windows-first codebase: Win32, COM, ATL, and Windows integer types are common and acceptable.
+- Use `std::wstring` for Unicode/Chinese-facing Windows/UI strings and `std::string` for protocol or narrow text paths where the surrounding code does so.
+- Use fixed-width integer types like `uint32_t`, `uint16_t`, and `int32_t` for packet/protocol structures.
+- Keep protocol values little-endian; packet comments and builders assume that convention.
+- Prefer RAII wrappers already in use (`CComPtr`, lock helpers, standard containers) over manual lifetime management where possible.
 
-| 文件 | 位置 |
-|------|------|
-| `demo.cpp:84` | `CURRENT_VERSION = X.XXf` |
-| `demo.cpp` | 窗口标题 `L"卡布西游浮影微端 VX.XX"` |
-| `wpe_hook.cpp` | Hook 标题 |
-| `resources/ui.html` | UI 标题 |
-| `resources/app.rc` | 版本信息 |
+### Error handling
 
-## 常见问题
+- Match local conventions: Win32/COM-heavy code often returns `BOOL`, `bool`, or `HRESULT`-driven success/failure rather than exceptions.
+- Check `HRESULT` with `FAILED`/`SUCCEEDED` and return early on failure.
+- Check pointer results from `MemoryLoadLibrary`, `MemoryGetProcAddress`, COM activation, and Win32 handle acquisition before use.
+- Keep failure paths simple and explicit; this codebase favors guard clauses over deeply nested control flow.
+- Do not introduce exceptions across existing Win32 boundaries unless a file already uses them.
 
-- **编译报错找不到头文件**: 检查 vcpkg 路径配置
-- **版本号一致仍弹更新**: 确保版本精度一致（如 `1.04f`）
+### Comments and documentation
+
+- Many headers use Doxygen-style comments in Chinese; continue that style when adding public APIs to those files.
+- Keep comments for non-obvious protocol behavior, hook behavior, or concurrency logic.
+- Do not restate obvious code with comments.
+
+### Concurrency and globals
+
+- Global state is common in `demo.cpp` and hook code; modify it carefully and minimize new global coupling.
+- Synchronization primitives include `CRITICAL_SECTION`, `CONDITION_VARIABLE`, mutexes, and atomics; use the existing primitive already chosen in the file.
+- For packet waiting/dispatch logic, preserve the current thread-safety model and timeout behavior.
+
+### UI and frontend assets
+
+- `resources/ui.html` is source; `embedded/ui_html.h` is generated output.
+- Prefer editing `resources/ui.html` and letting the build regenerate the embedded header.
+- Preserve the established desktop-tool layout and Chinese UI wording unless the task says otherwise.
+
+### Generated files
+
+- Treat `embedded/webview2loader_data.h`, `embedded/ui_html.h`, and `embedded/zlib_data.h` as generated.
+- Do not hand-edit generated headers unless the task is specifically about the generator or a generated artifact check.
+- If changing embed behavior, edit the Python generator scripts or source assets instead.
+
+## Domain-specific guidance
+
+- Packet layout is `Magic(2) + Length(2) + Opcode(4) + Params(4) + Body`.
+- Magic values are `0x5344` for normal packets and `0x5343` for compressed packets.
+- Opcode calculation and protocol numbers are little-endian; preserve existing helper usage instead of rewriting protocol code ad hoc.
+- When adding a new game feature, the usual path is: add opcode/constants, add any state structures, implement send/response logic, register handlers, then expose UI actions.
+
+## Agent workflow recommendations
+
+- Before editing, inspect nearby code and follow file-local conventions.
+- Prefer minimal diffs in large files like `demo.cpp` and `wpe_hook.cpp`.
+- Rebuild after native changes whenever feasible.
+- Mention clearly when validation is limited because the repository has no automated tests.
+- If future Cursor or Copilot rules appear, update this file so agents have a single consolidated guide.

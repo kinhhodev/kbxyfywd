@@ -10,7 +10,6 @@
 
 #include <windows.h>
 #include <string>
-#include <functional>
 
 /**
  * @class UIBridge
@@ -92,20 +91,6 @@ public:
      */
     void ExecuteJS(const std::wstring& script);
 
-    /**
-     * @brief 调用 JavaScript 函数
-     * @param funcName 函数名
-     * @param args 参数列表（JSON 格式）
-     */
-    void CallJSFunction(const std::wstring& funcName, const std::wstring& args = L"");
-
-    /**
-     * @brief 调用带回调的 JavaScript 函数
-     * @param funcName 函数名
-     * @param args 参数列表
-     */
-    void CallJSFunctionWithCheck(const std::wstring& funcName, const std::wstring& args = L"");
-
     // ================================
     // 辅助方法
     // ================================
@@ -116,14 +101,6 @@ public:
      * @return 转义后的字符串
      */
     static std::wstring EscapeJsonString(const std::wstring& input);
-
-    /**
-     * @brief 格式化简单消息
-     * @param format 格式字符串
-     * @param ... 可变参数
-     * @return 格式化后的字符串
-     */
-    static std::wstring FormatString(const wchar_t* format, ...);
 
 private:
     UIBridge() = default;

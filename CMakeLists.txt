@@ -20,6 +20,7 @@ add_executable(WebView2Demo WIN32
     packet_builder.cpp
     data_interceptor.cpp
     ui_bridge.cpp
+    web_message_handler.cpp
 )
 
 # 设置编译器使用UTF-8编码
@@ -49,7 +50,6 @@ target_link_libraries(WebView2Demo PRIVATE
     winhttp.lib
     wininet.lib
     "${VCPKG_LIB_DIR}/MemoryModule.lib"
-    "${VCPKG_LIB_DIR}/minhook.x64.lib"
     "${VCPKG_LIB_DIR}/zlib.lib"
 )
 
@@ -113,6 +113,7 @@ if(MSVC)
         /Gw        # 优化全局变量
         /GF        # 字符串池化
         /Gy        # 函数级链接
+        /Zc:inline # 删除未引用的 COMDAT
         /Ob2       # 内联展开（推荐）
         /GS-       # 禁用安全检查（减少 CRT 体积）
         /GR-       # 禁用 RTTI

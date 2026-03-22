@@ -2299,6 +2299,7 @@ void ResponseDispatcher::InitializeDefaultHandlers() {
     registerParams(Opcode::ACTIVITY_QUERY_BACK, Act778::ACTIVITY_ID, ProcessAct778Response);
     registerParams(Opcode::ACTIVITY_QUERY_BACK, Act793::ACTIVITY_ID, ProcessAct793Response);
     registerParams(Opcode::ACTIVITY_QUERY_BACK, Act791::ACTIVITY_ID, ProcessAct791Response);
+    registerParams(Opcode::HORSE_COMPETITION_BACK, HORSE_COMPETITION_ACT_ID, ProcessHorseCompetitionResponse);
 
     registerParams(Opcode::HEAVEN_FURUI_BACK, HeavenFurui::ACTIVITY_ID, ProcessHeavenFuruiResponse);
     registerParams(Opcode::ACTIVITY_QUERY_BACK, HeavenFurui::ACTIVITY_ID, ProcessHeavenFuruiResponse);
@@ -8782,7 +8783,6 @@ static void HandleHorseEndGameResponse(HorseCompetitionState& state, const GameP
     state.receivedEndGame = true;
     SetHorsePhase(state, HORSE_PHASE_FINISHED);
     state.isSettling = false;
-    state.isFinished = false;
 }
 
 static void HandleHorseSyncMemberResponse(HorseCompetitionState& state, const std::string& json) {

@@ -140,23 +140,3 @@ public:
 private:
     CRITICAL_SECTION m_cs;  ///< 临界区对象
 };
-
-// ============================================================================
-// 远程DLL下载函数
-// ============================================================================
-
-/**
- * @brief 从HTTP/HTTPS URL下载二进制数据
- * @param url 下载地址（支持HTTP和HTTPS）
- * @param timeoutMs 超时时间（毫秒），默认30秒
- * @return 下载的二进制数据，失败时返回空vector
- * 
- * @example
- * @code
- * auto data = DownloadBinaryFromUrl(L"https://example.com/file.dll");
- * if (!data.empty()) {
- *     HMEMORYMODULE module = MemoryLoadLibrary(data.data(), data.size());
- * }
- * @endcode
- */
-std::vector<uint8_t> DownloadBinaryFromUrl(const std::wstring& url, DWORD timeoutMs = 30000);

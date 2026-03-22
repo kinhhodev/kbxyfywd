@@ -1467,13 +1467,12 @@
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 140px;">
                             <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">坐骑大赛</div>
                             <div style="font-size: 8px; color: var(--color-text-tertiary);">多人竞速小游戏 每日50点上限</div>
-                            <select id="horse-competition-mount" style="font-size: 9px; padding: 2px 4px; border: 1px solid var(--color-border); border-radius: 2px;">
-                                <option value="own">使用自带坐骑</option>
-                                <option value="temp">使用临时坐骑</option>
-                            </select>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">模式: 自动刷满每日骑乘点（固定临时坐骑）</div>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">可获得积分: <span id="horse-competition-points" style="color: var(--color-primary); font-weight: 600;">--</span></div>
                             <div style="font-size: 9px; color: var(--color-text-secondary);">状态: <span id="horse-competition-status" style="color: var(--color-text-tertiary);">就绪</span></div>
                             <div style="display: flex; gap: 4px;">
-                                <button id="one-key-horse-competition" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">一键完成</button>
+                                <button id="one-key-horse-competition" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">开始</button>
+                                <button id="stop-horse-competition" class="btn" style="font-size: 9px; padding: 3px 6px; flex: 1; background: #fff4e5; color: #9a5b00; border: 1px solid #ffd08a;">停止</button>
                             </div>
                         </div>
                         
@@ -2854,12 +2853,17 @@
 
         // 坐骑大赛 - 一键完成
         window.oneKeyHorseCompetition = function() {
-            var mountSelect = document.getElementById('horse-competition-mount');
-            var mountType = mountSelect ? mountSelect.value : 'own';
             if (window.chrome && window.chrome.webview) {
                 window.chrome.webview.postMessage(JSON.stringify({ 
-                    action: 'one_key_horse_competition',
-                    mountType: mountType
+                    action: 'one_key_horse_competition'
+                }));
+            }
+        };
+
+        window.stopHorseCompetition = function() {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(JSON.stringify({
+                    action: 'stop_horse_competition'
                 }));
             }
         };
@@ -2869,6 +2873,13 @@
             var statusEl = document.getElementById('horse-competition-status');
             if (statusEl) {
                 statusEl.textContent = status;
+            }
+        };
+
+        window.updateHorseCompetitionPoints = function(points) {
+            var pointsEl = document.getElementById('horse-competition-points');
+            if (pointsEl) {
+                pointsEl.textContent = points;
             }
         };
 
@@ -3168,6 +3179,10 @@
             var horseCompetitionBtn = document.getElementById('one-key-horse-competition');
             if (horseCompetitionBtn) {
                 horseCompetitionBtn.addEventListener('click', window.oneKeyHorseCompetition);
+            }
+            var stopHorseCompetitionBtn = document.getElementById('stop-horse-competition');
+            if (stopHorseCompetitionBtn) {
+                stopHorseCompetitionBtn.addEventListener('click', window.stopHorseCompetition);
             }
         });
 

@@ -1,0 +1,5 @@
+#pragma once
+
+struct ICoreWebView2WebMessageReceivedEventHandler;
+
+ICoreWebView2WebMessageReceivedEventHandler* CreateWebMessageHandler();
