@@ -1,11 +1,14 @@
 #include "packet_parser.h"
 #include <MemoryModule.h>
 #include "embedded/zlib_data.h"
+#include "battle_six.h"
+#include "dungeon_jump.h"
 #include "wpe_hook.h"
 #include "ui_bridge.h"
 #include "utils.h"
 #include <wininet.h>
 #include <cstdlib>
+#include <mutex>
 #include <unordered_map>
 #pragma comment(lib, "wininet.lib")
 
@@ -45,15 +48,15 @@ std::vector<uint8_t> PacketParser::g_recvBuffer;
 
 // 全局数据映射表的互斥锁
 static std::mutex g_dataMapsMutex;
-static std::unordered_map<int, std::wstring> g_petNames;
+std::unordered_map<int, std::wstring> g_petNames;
 std::unordered_map<int, std::wstring> g_skillNames;
 std::unordered_map<int, int> g_skillPowers;  // 技能ID -> 威力值
 static std::unordered_map<int, std::wstring> g_toolNames;
 static std::unordered_map<int, std::wstring> g_mapNames;
-static std::unordered_map<int, std::wstring> g_elemNames;      // 系别名称映射
-static std::unordered_map<int, std::wstring> g_geniusNames;    // 性格名称映射
+std::unordered_map<int, std::wstring> g_elemNames;             // 系别名称映射
+std::unordered_map<int, std::wstring> g_geniusNames;           // 性格名称映射
 static std::unordered_map<int, std::wstring> g_aptitudeNames;  // 资质名称映射
-static std::unordered_map<int, int> g_petElems;                // 妖怪ID -> 系别ID映射
+std::unordered_map<int, int> g_petElems;                       // 妖怪ID -> 系别ID映射
 static std::unordered_map<int, std::wstring> g_bufNames;       // Buff 名称映射 (从 bufInfo.xml)
 static std::unordered_map<int, std::wstring> g_bufDescs;       // Buff 描述映射
 static std::wstring g_lastItemName;

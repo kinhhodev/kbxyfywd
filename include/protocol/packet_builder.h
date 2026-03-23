@@ -8,10 +8,11 @@
 
 #pragma once
 
-#include <windows.h>
 #include <string>
 #include <vector>
 #include <cstdint>
+
+#include "packet_protocol.h"
 
 /**
  * @class PacketBuilder

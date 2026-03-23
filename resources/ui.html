@@ -55,10 +55,10 @@
             --easing-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275); /* 弹簧效果 */
             
             /* 动画时长 - 优化为更短的时长（加快响应） */
-            --duration-fast: 60ms;
-            --duration-normal: 100ms;
-            --duration-slow: 150ms;
-            --duration-slower: 200ms;
+            --duration-fast: 35ms;
+            --duration-normal: 65ms;
+            --duration-slow: 90ms;
+            --duration-slower: 130ms;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -654,13 +654,384 @@
         
         .sub-tab-content.active {
             display: block;
-            animation: fadeIn var(--duration-normal) var(--easing-enter);
+            animation: fadeIn var(--duration-fast) var(--easing-enter);
         }
         
         /* 针对 active 状态也需要 flex 布局 */
         .tab-content.active .sub-tab-content.active {
             display: flex;
             flex-direction: column;
+        }
+
+        #sub-spiritcollect {
+            padding: 4px;
+            box-sizing: border-box;
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .tab-content.active #sub-spiritcollect.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        #sub-spiritcollect .spirit-collect-layout {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(220px, 0.95fr);
+            gap: 8px;
+            align-items: stretch;
+            overflow: hidden;
+        }
+
+        .spirit-giving-panel,
+        .spirit-record-side {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 0;
+            min-height: 0;
+            background: var(--color-background);
+            border: 1px solid var(--color-border);
+            border-radius: 6px;
+            padding: 8px;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+        }
+
+        .spirit-giving-panel {
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-right: 6px;
+        }
+
+        .spirit-giving-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            flex-wrap: nowrap;
+        }
+
+        .spirit-giving-actions {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 4px;
+            margin-left: auto;
+        }
+
+        .spirit-giving-actions .btn {
+            font-size: 8px;
+            padding: 2px 6px;
+            min-height: 22px;
+            margin: 0;
+            line-height: 1.1;
+        }
+
+        .spirit-stats {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 4px 6px;
+            font-size: 9px;
+            color: var(--color-text-secondary);
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+            line-height: 1.2;
+            min-width: 0;
+        }
+
+        .spirit-stat-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            background: #f5f8fc;
+            border: 1px solid #dbe7f2;
+            border-radius: 6px;
+            white-space: nowrap;
+        }
+
+        #spirit-list {
+            flex: 1 1 auto;
+            min-height: 88px;
+            overflow-y: auto;
+            border: 1px solid var(--color-border);
+            border-radius: 6px;
+            padding: 4px;
+            background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+            font-size: 10px;
+            scrollbar-gutter: stable;
+        }
+
+        #sub-spiritcollect.sub-tab-content {
+            overflow: hidden;
+            padding-right: 0;
+        }
+
+        .spirit-list-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 4px;
+            align-content: start;
+        }
+
+        .spirit-list-empty {
+            color: var(--color-text-tertiary);
+            text-align: center;
+            padding: 18px 8px;
+        }
+
+        .spirit-item {
+            position: relative;
+            padding: 5px 6px 4px;
+            cursor: pointer;
+            border-radius: 8px;
+            border: 1px solid #d9e4ef;
+            background: linear-gradient(180deg, #fbfdff 0%, #f1f6fb 100%);
+            transition: transform var(--duration-fast) var(--easing-standard), box-shadow var(--duration-fast) var(--easing-standard), border-color var(--duration-fast) var(--easing-standard), background var(--duration-fast) var(--easing-standard);
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .spirit-item:hover {
+            transform: translateY(-1px);
+            border-color: #b8d3ea;
+            box-shadow: 0 4px 10px rgba(0, 120, 212, 0.12);
+        }
+
+        .spirit-item.selected {
+            border-color: #6fb6f0;
+            background: linear-gradient(135deg, #eaf6ff 0%, #dcefff 100%);
+            box-shadow: 0 6px 14px rgba(0, 120, 212, 0.18);
+        }
+
+        .spirit-item.selected::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+            pointer-events: none;
+        }
+
+        .spirit-item-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+
+        .spirit-item-name {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: block;
+            font-size: 9px;
+            font-weight: 700;
+            color: var(--color-text-primary);
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .spirit-item-tag {
+            flex: 0 0 auto;
+            padding: 1px 5px;
+            border-radius: 999px;
+            background: rgba(0, 120, 212, 0.1);
+            color: var(--color-primary);
+            font-weight: 700;
+            font-size: 8px;
+            line-height: 1.2;
+            white-space: nowrap;
+        }
+
+        .spirit-item-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 3px;
+            margin-bottom: 2px;
+        }
+
+        .spirit-mini-chip {
+            display: inline-flex;
+            align-items: center;
+            min-width: 0;
+            max-width: 100%;
+            padding: 1px 4px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.04);
+            color: var(--color-text-secondary);
+            font-size: 8px;
+            line-height: 1.2;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .spirit-item-detail {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            font-size: 8px;
+            color: var(--color-text-secondary);
+            line-height: 1.3;
+        }
+
+        .spirit-item-detail-line {
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .spirit-selected-line {
+            font-size: 10px;
+            color: var(--color-text-secondary);
+            padding: 5px 7px;
+            background: #e8f4fd;
+            border-radius: 6px;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+
+        .spirit-send-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .spirit-send-row input {
+            flex: 1 1 104px;
+            min-width: 0;
+            border-radius: 6px;
+            border: 1px solid var(--color-border);
+            font-size: 9px;
+            padding: 4px 6px;
+            height: 26px;
+            box-sizing: border-box;
+        }
+
+        .spirit-status-line {
+            font-size: 9px;
+            color: var(--color-text-tertiary);
+            min-height: 16px;
+            padding: 2px 2px 0;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+
+        .spirit-record-side {
+            flex: 1;
+            min-width: 0;
+            min-height: 0;
+            gap: 6px;
+        }
+
+        .spirit-record-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .spirit-record-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--color-text-primary);
+        }
+
+        .spirit-record-subtitle {
+            font-size: 9px;
+            color: var(--color-text-tertiary);
+        }
+
+        .spirit-record-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            background: linear-gradient(180deg, #fffdf8 0%, #f8fbff 100%);
+            border: 1px solid var(--color-border);
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 10px;
+            line-height: 1.45;
+            color: var(--color-text-secondary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .spirit-send-label {
+            font-size: 9px;
+            color: var(--color-text-secondary);
+            min-width: 38px;
+            line-height: 1.25;
+        }
+
+        .spirit-send-button {
+            flex: 0 1 84px;
+            min-width: 84px;
+            min-height: 26px;
+            margin: 0;
+            font-size: 9px;
+            padding: 4px 8px;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 960px) {
+            #sub-spiritcollect .spirit-collect-layout {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .spirit-giving-panel {
+                max-height: none;
+            }
+
+            .spirit-record-body {
+                min-height: 0;
+            }
+
+            .spirit-list-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .spirit-giving-header {
+                flex-wrap: wrap;
+                align-items: flex-start;
+            }
+
+            .spirit-giving-actions {
+                margin-left: 0;
+            }
+
+            .spirit-stats {
+                flex-wrap: wrap;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .spirit-list-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .spirit-send-row {
+                align-items: stretch;
+            }
+
+            .spirit-send-label {
+                min-width: auto;
+                width: 100%;
+            }
+
+            .spirit-send-button {
+                width: 100%;
+            }
         }
 
         /* 道具选择按钮样式 */
@@ -949,6 +1320,29 @@
             <div class="update-dialog-footer">
                 <button class="update-dialog-btn secondary" id="key-login-cancel">取消</button>
                 <button class="update-dialog-btn primary" id="key-login-confirm">登录</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="update-dialog-overlay" id="spirit-confirm-overlay">
+        <div class="update-dialog">
+            <div class="update-dialog-header">
+                <div class="update-dialog-header-icon">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
+                    </svg>
+                </div>
+                <span>确认赠送</span>
+            </div>
+            <div class="update-dialog-body">
+                <div class="update-dialog-announcement" id="spirit-confirm-title">精魄赠送确认</div>
+                <div class="update-dialog-content" id="spirit-confirm-message"></div>
+            </div>
+            <div class="update-dialog-footer">
+                <button class="update-dialog-btn secondary" id="spirit-confirm-cancel">取消</button>
+                <button class="update-dialog-btn primary" id="spirit-confirm-accept">确认赠送</button>
             </div>
         </div>
     </div>
@@ -1336,6 +1730,7 @@
                     <button class="sub-tab-button" onclick="openSubTab(event, 'sub-lingyu')">灵玉区</button>
                     <button class="sub-tab-button" onclick="openSubTab(event, 'sub-dungeon')">副本区</button>
                     <button class="sub-tab-button" onclick="openSubTab(event, 'sub-battlesix')">万妖盛会</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-spiritcollect')">精魄系统</button>
                 </div>
 
                 <!-- 子标签页内容 -->
@@ -1855,6 +2250,50 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 精魄系统标签页 -->
+            <div id="sub-spiritcollect" class="sub-tab-content">
+                <div class="spirit-collect-layout">
+                    <div class="spirit-giving-panel">
+                        <div class="spirit-giving-header">
+                            <div class="spirit-stats">
+                                <span class="spirit-stat-chip">今日可赠 <span id="spirit-daily-out" style="color: var(--color-primary); font-weight: 600;">-</span></span>
+                                <span class="spirit-stat-chip">本周可赠 <span id="spirit-weekly-out" style="color: var(--color-primary); font-weight: 600;">-</span></span>
+                            </div>
+                            <div class="spirit-giving-actions">
+                                <button onclick="refreshSpiritPanel()" class="btn btn-secondary">刷新</button>
+                                <button onclick="getSpiritRecord(1)" class="btn btn-secondary">赠送记录</button>
+                                <button onclick="getSpiritRecord(2)" class="btn btn-secondary">接收记录</button>
+                            </div>
+                        </div>
+
+                        <div id="spirit-list">
+                            <div style="color: var(--color-text-tertiary); text-align: center; padding: 20px 8px;">点击“刷新”加载精魄列表</div>
+                        </div>
+
+                        <div class="spirit-selected-line">
+                            已选精魄: <span id="spirit-selected" style="color: var(--color-primary); font-weight: 600;">无</span>
+                        </div>
+
+                        <div class="spirit-send-row">
+                            <label class="spirit-send-label">卡布号:</label>
+                            <input type="text" id="spirit-friend-id" placeholder="输入对方卡布号">
+                            <button onclick="verifyAndSendSpirit()" class="btn btn-primary spirit-send-button">赠送精魄</button>
+                        </div>
+
+                        <div class="spirit-status-line" id="spirit-status"></div>
+                    </div>
+
+                    <div class="spirit-record-side">
+                        <div class="spirit-record-header">
+                            <div class="spirit-record-title">记录面板</div>
+                            <div id="spirit-record-title" class="spirit-record-subtitle">等待加载</div>
+                        </div>
+                        <div id="spirit-record-panel" class="spirit-record-body">
+                            点击右上角按钮查看赠送记录或接收记录。
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- WPE标签页 -->
@@ -1979,6 +2418,9 @@
             }
             document.getElementById(tabName).className += ' active';
             evt.currentTarget.className += ' active';
+            if (tabName === 'sub-spiritcollect') {
+                refreshSpiritPanel();
+            }
         }
 
         // 调试信息接收函数
@@ -2017,7 +2459,7 @@
             var elements = tabContent.querySelectorAll('.section-title, .control-group, .input, .btn, .list-view, .list-item, .form-row, .divider');
             
             // 设置递增的延迟时间
-            var delay = 0.1;
+            var delay = 0.02;
             for (var i = 0; i < elements.length; i++) {
                 var element = elements[i];
                 resetAnimation(element);
@@ -2025,25 +2467,25 @@
                 // 根据元素类型设置不同的动画延迟
                 if (element.classList.contains('section-title')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.1;
+                    delay += 0.02;
                 } else if (element.classList.contains('control-group') || element.classList.contains('form-row')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.1;
+                    delay += 0.02;
                 } else if (element.classList.contains('input') || element.classList.contains('btn')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.05;
+                    delay += 0.01;
                 } else if (element.classList.contains('list-view')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.1;
+                    delay += 0.02;
                 } else if (element.classList.contains('list-item')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.05;
+                    delay += 0.01;
                 } else if (element.classList.contains('divider')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.05;
+                    delay += 0.01;
                 } else if (element.classList.contains('panel-animate')) {
                     element.style.animationDelay = delay + 's';
-                    delay += 0.07;
+                    delay += 0.015;
                 }
             }
             
@@ -4898,6 +5340,390 @@
             updateDungeonStatus(text, 'info');
         };
 
+        // ============================================
+        // 精魄赠送系统功能
+        // ============================================
+        
+        // 精魄系统状态
+        let spiritState = {
+            dailyOut: 0,
+            weeklyOut: 0,
+            spiritList: [],
+            selectedSpirit: null,
+            lastRecordType: 0
+        };
+        let spiritPendingGift = null;
+
+        function getSpiritDisplayName(spirit) {
+            if (!spirit) {
+                return '未知精魄';
+            }
+            const name = spirit.name || ('妖怪ID ' + spirit.eggIid);
+            return '【' + name + '】精魄';
+        }
+
+        function getSpiritTypeName(type) {
+            return type === 1 ? '普通' : type === 2 ? '稀有' : '特殊';
+        }
+
+        function getSpiritCharacterName(spirit) {
+            if (!spirit) {
+                return '未知性格';
+            }
+            return spirit.characterName || (spirit.character > 0 ? ('性格' + spirit.character) : '未知性格');
+        }
+
+        function formatSpiritDate(ts) {
+            if (!ts) {
+                return '未知时间';
+            }
+            const date = new Date(ts * 1000);
+            if (Number.isNaN(date.getTime())) {
+                return '未知时间';
+            }
+            return date.getFullYear() + '-' +
+                String(date.getMonth() + 1).padStart(2, '0') + '-' +
+                String(date.getDate()).padStart(2, '0');
+        }
+
+        function getSpiritSkillSummary(spirit) {
+            if (!spirit || !Array.isArray(spirit.skillNames) || !spirit.skillNames.length) {
+                return '无技能';
+            }
+            return spirit.skillNames.slice(0, 3).join(' / ');
+        }
+
+        function getSpiritSelectedSummary(spirit) {
+            if (!spirit) {
+                return '无';
+            }
+            return getSpiritDisplayName(spirit) + '｜' +
+                getSpiritTypeName(spirit.eggType) + '｜' +
+                (spirit.elemName || '未知系别') + '｜' +
+                getSpiritCharacterName(spirit) + '｜' +
+                formatSpiritDate(spirit.bornTime) + '｜' +
+                getSpiritSkillSummary(spirit);
+        }
+
+        function getSpiritHistoryNameById(spiritId) {
+            const matched = spiritState.spiritList.find(spirit => spirit.eggIid === spiritId);
+            return matched && matched.name ? matched.name : ('ID:' + spiritId);
+        }
+
+        function escapeSpiritHtml(text) {
+            return String(text == null ? '' : text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderSpiritRecord(text, title) {
+            const panel = document.getElementById('spirit-record-panel');
+            const titleEl = document.getElementById('spirit-record-title');
+            if (titleEl) {
+                titleEl.textContent = title || '记录面板';
+            }
+            if (panel) {
+                panel.textContent = text || '暂无记录';
+                panel.scrollTop = 0;
+            }
+        }
+
+        function requestSpiritOpenUi() {
+            if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage({
+                    type: 'spiritCollect',
+                    action: 'open_ui'
+                });
+            }
+        }
+
+        function requestSpiritList() {
+            if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage({
+                    type: 'spiritCollect',
+                    action: 'getSpirits'
+                });
+            }
+        }
+
+        function refreshSpiritPanel() {
+            updateSpiritStatus('正在刷新精魄数据...', 'info');
+            requestSpiritOpenUi();
+            setTimeout(function() {
+                requestSpiritList();
+            }, 80);
+        }
+        
+        // 获取精魄列表
+        function getSpiritList() {
+            updateSpiritStatus('正在获取精魄列表...', 'info');
+            requestSpiritList();
+        }
+        
+        // 显示精魄列表
+        function renderSpiritList() {
+            const container = document.getElementById('spirit-list');
+            if (!container) return;
+
+            if (!spiritState.spiritList.length) {
+                spiritState.selectedSpirit = null;
+                document.getElementById('spirit-selected').textContent = '无';
+                container.innerHTML = '<div class="spirit-list-empty">暂无精魄</div>';
+                return;
+            }
+
+            if (spiritState.selectedSpirit) {
+                const selected = spiritState.spiritList.find(spirit => spirit.eggId === spiritState.selectedSpirit.eggId);
+                spiritState.selectedSpirit = selected || null;
+            }
+
+            if (spiritState.selectedSpirit) {
+                document.getElementById('spirit-selected').textContent = getSpiritSelectedSummary(spiritState.selectedSpirit);
+            }
+            
+            let html = '<div class="spirit-list-grid">';
+            spiritState.spiritList.forEach(spirit => {
+                const isSelected = spiritState.selectedSpirit && spiritState.selectedSpirit.eggId === spirit.eggId;
+                html += '<div class="spirit-item' + (isSelected ? ' selected' : '') + '" onclick="selectSpirit(' + spirit.eggId + ')">' +
+                    '<div class="spirit-item-top">' +
+                        '<span class="spirit-item-name">' + escapeSpiritHtml(getSpiritDisplayName(spirit)) + '</span>' +
+                        '<span class="spirit-item-tag">#' + spirit.eggId + '</span>' +
+                    '</div>' +
+                    '<div class="spirit-item-chips">' +
+                        '<span class="spirit-mini-chip">' + escapeSpiritHtml(getSpiritTypeName(spirit.eggType)) + '</span>' +
+                        '<span class="spirit-mini-chip">' + escapeSpiritHtml(spirit.elemName || '未知系别') + '</span>' +
+                        '<span class="spirit-mini-chip">' + escapeSpiritHtml(getSpiritCharacterName(spirit)) + '</span>' +
+                        '<span class="spirit-mini-chip">' + escapeSpiritHtml('获得 ' + formatSpiritDate(spirit.bornTime)) + '</span>' +
+                    '</div>' +
+                    '<div class="spirit-item-detail">' +
+                        '<div class="spirit-item-detail-line">技能: ' + escapeSpiritHtml(getSpiritSkillSummary(spirit)) + '</div>' +
+                    '</div>' +
+                '</div>';
+            });
+            html += '</div>';
+            container.innerHTML = html;
+        }
+        
+        // 选择精魄
+        function selectSpirit(eggId) {
+            const spirit = spiritState.spiritList.find(s => s.eggId === eggId);
+            if (spirit) {
+                spiritState.selectedSpirit = spirit;
+                document.getElementById('spirit-selected').textContent = getSpiritSelectedSummary(spirit);
+                renderSpiritList();
+            }
+        }
+        
+        // 验证并赠送精魄
+        function verifyAndSendSpirit() {
+            const friendIdInput = document.getElementById('spirit-friend-id');
+            const friendId = friendIdInput ? friendIdInput.value.trim() : '';
+            
+            if (!friendId) {
+                updateSpiritStatus('请输入对方卡布号', 'error');
+                return;
+            }
+            
+            if (!/^\d+$/.test(friendId)) {
+                updateSpiritStatus('卡布号只能包含数字', 'error');
+                return;
+            }
+            
+            if (!spiritState.selectedSpirit) {
+                updateSpiritStatus('请先选择要赠送的精魄', 'error');
+                return;
+            }
+            
+            if (spiritState.dailyOut <= 0) {
+                updateSpiritStatus('今日赠送次数已用完', 'error');
+                return;
+            }
+            
+            if (spiritState.weeklyOut <= 0) {
+                updateSpiritStatus('本周赠送次数已用完', 'error');
+                return;
+            }
+            
+            // 先验证玩家
+            updateSpiritStatus('正在验证玩家信息...', 'info');
+            if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage({
+                    type: 'spiritCollect',
+                    action: 'verifyPlayer',
+                    friendId: parseInt(friendId)
+                });
+            }
+        }
+        
+        // 获取历史记录
+        function getSpiritRecord(type) {
+            spiritState.lastRecordType = type;
+            updateSpiritStatus('正在获取' + (type === 1 ? '赠送' : '接收') + '记录...', 'info');
+            renderSpiritRecord('正在加载' + (type === 1 ? '赠送' : '接收') + '记录...', type === 1 ? '赠送记录' : '接收记录');
+            if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                window.chrome.webview.postMessage({
+                    type: 'spiritCollect',
+                    action: 'history',
+                    recordType: type
+                });
+            }
+        }
+        
+        // 更新精魄系统状态显示
+        function updateSpiritStatus(text, type) {
+            const statusEl = document.getElementById('spirit-status');
+            if (statusEl) {
+                statusEl.textContent = text;
+                statusEl.style.color = type === 'error' ? '#c62828' : type === 'success' ? '#2e7d32' : 'var(--color-text-tertiary)';
+            }
+        }
+
+        function hideSpiritConfirmDialog() {
+            const overlay = document.getElementById('spirit-confirm-overlay');
+            if (overlay) {
+                overlay.classList.remove('show');
+            }
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'spirit-confirm-dialog-hide' });
+            }
+            spiritPendingGift = null;
+        }
+
+        function showSpiritConfirmDialog(playerName, friendId) {
+            const overlay = document.getElementById('spirit-confirm-overlay');
+            const messageEl = document.getElementById('spirit-confirm-message');
+            const confirmBtn = document.getElementById('spirit-confirm-accept');
+            const cancelBtn = document.getElementById('spirit-confirm-cancel');
+
+            if (!overlay || !messageEl || !confirmBtn || !cancelBtn || !spiritState.selectedSpirit) {
+                updateSpiritStatus('确认弹窗初始化失败，请稍后重试', 'error');
+                return;
+            }
+
+            spiritPendingGift = {
+                friendId: friendId,
+                playerName: playerName,
+                eggId: spiritState.selectedSpirit.eggId,
+                spiritName: getSpiritDisplayName(spiritState.selectedSpirit)
+            };
+
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'spirit-confirm-dialog-show' });
+            }
+
+            messageEl.textContent = '确定要将【' + spiritPendingGift.spiritName + '】赠送给【' + playerName + '】吗？';
+
+            cancelBtn.onclick = function() {
+                hideSpiritConfirmDialog();
+                updateSpiritStatus('已取消赠送', 'info');
+            };
+            overlay.onclick = function(event) {
+                if (event.target === overlay) {
+                    hideSpiritConfirmDialog();
+                    updateSpiritStatus('已取消赠送', 'info');
+                }
+            };
+
+            confirmBtn.onclick = function() {
+                const pendingGift = spiritPendingGift;
+                hideSpiritConfirmDialog();
+
+                if (!pendingGift) {
+                    updateSpiritStatus('赠送数据已失效，请重新验证玩家信息', 'error');
+                    return;
+                }
+
+                if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                    window.chrome.webview.postMessage({
+                        type: 'spiritCollect',
+                        action: 'sendSpirit',
+                        friendId: pendingGift.friendId,
+                        eggId: pendingGift.eggId
+                    });
+                    updateSpiritStatus('正在发送精魄...', 'info');
+                } else {
+                    updateSpiritStatus('当前环境不支持发送精魄请求', 'error');
+                }
+            };
+
+            updateSpiritStatus('玩家验证成功，请确认赠送对象', 'info');
+            overlay.classList.add('show');
+        }
+        
+        // 接收C++发送的精魄系统数据
+        window.handleSpiritCollectData = function(data) {
+            switch(data.type) {
+                case 'spiritState':
+                    spiritState.dailyOut = data.data.dOut;
+                    spiritState.weeklyOut = data.data.wOut;
+                    document.getElementById('spirit-daily-out').textContent = data.data.dOut;
+                    document.getElementById('spirit-weekly-out').textContent = data.data.wOut;
+                    updateSpiritStatus('赠送状态已更新', 'success');
+                    break;
+                case 'spiritList':
+                    spiritState.spiritList = data.data || [];
+                    renderSpiritList();
+                    updateSpiritStatus('已获取 ' + spiritState.spiritList.length + ' 个精魄', 'success');
+                    break;
+                case 'confirm':
+                    const friendIdInput = document.getElementById('spirit-friend-id');
+                    const friendId = friendIdInput ? parseInt(friendIdInput.value, 10) || 0 : 0;
+                    if (!spiritState.selectedSpirit) {
+                        updateSpiritStatus('当前没有选中的精魄，请重新选择后再试', 'error');
+                        break;
+                    }
+                    if (friendId <= 0) {
+                        updateSpiritStatus('卡布号无效，请重新输入后再试', 'error');
+                        break;
+                    }
+                    showSpiritConfirmDialog(data.playerName, friendId);
+                    break;
+                case 'alert':
+                    hideSpiritConfirmDialog();
+                    updateSpiritStatus(data.message, 'error');
+                    break;
+                case 'history':
+                    let recordText = data.recordType === 1 ? '赠送记录:\n' : '接收记录:\n';
+                    if (data.json) {
+                        try {
+                            const recordList = JSON.parse(data.json);
+                            if (Array.isArray(recordList) && recordList.length > 0) {
+                                recordList.forEach(item => {
+                                    if (Array.isArray(item) && item.length >= 5) {
+                                        const date = new Date(item[3] * 1000);
+                                        const dateText = date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+                                        const spiritName = getSpiritHistoryNameById(item[2]);
+                                        if (item[4] === 2) {
+                                            recordText += '【' + dateText + '】【' + item[1] + '】赠送你一个【' + spiritName + '精魄】\n';
+                                        } else {
+                                            recordText += '【' + dateText + '】你赠送给【' + item[1] + '】一个【' + spiritName + '精魄】\n';
+                                        }
+                                    }
+                                });
+                            } else {
+                                recordText += '暂无记录';
+                            }
+                        } catch (e) {
+                            recordText += data.json;
+                        }
+                    } else {
+                        recordText += '暂无记录';
+                    }
+                    renderSpiritRecord(recordText, data.recordType === 1 ? '赠送记录' : '接收记录');
+                    updateSpiritStatus('记录已显示', 'success');
+                    break;
+                case 'sendSuccess':
+                    hideSpiritConfirmDialog();
+                    updateSpiritStatus(data.message || '精魄赠送成功！', 'success');
+                    // 重新获取精魄列表
+                    setTimeout(() => getSpiritList(), 500);
+                    break;
+            }
+        };
+
         // 万妖盛会PVP功能
         document.addEventListener('DOMContentLoaded', function() {
             // 自动匹配按钮
@@ -4955,6 +5781,8 @@
                     stopDungeonJump();
                 };
             }
+
+            renderSpiritRecord('点击右上角按钮查看赠送记录或接收记录。', '等待加载');
         });
 
     </script>

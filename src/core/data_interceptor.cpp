@@ -14,16 +14,14 @@
  */
 
 #include "data_interceptor.h"
-#include "packet_parser.h"
+#include "packet_zlib_api.h"
 #include "utils.h"
 #include <cstring>
 #include <algorithm>
 #include <string>
 
 // 前置声明：从 packet_parser.h 中导入
-typedef int (*ZlibCompress2Func)(unsigned char* dest, unsigned long* destLen,
-                                  const unsigned char* source, unsigned long sourceLen, int level);
-extern ZlibCompress2Func GetZlibCompress2();
+// zlib API declarations are provided by packet_zlib_api.h.
 
 // ============================================================================
 // 内部常量和变量

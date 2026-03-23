@@ -11,7 +11,13 @@
 #include <thread>
 #include <vector>
 
+#include "battle_six.h"
+#include "dungeon_jump.h"
+#include "activity_minigames.h"
+#include "horse_competition.h"
+#include "shuangtai.h"
 #include "wpe_hook.h"
+#include "spirit_collect.h"
 #include "utils.h"
 #include "ui_bridge.h"
 
@@ -282,6 +288,10 @@ public:
             ShowWindow(g_hwnd_webbrowser, SW_HIDE);
         } else if (msg.find(L"key-login-dialog-hide") != std::wstring::npos) {
             ShowWindow(g_hwnd_webbrowser, SW_SHOW);
+        } else if (msg.find(L"spirit-confirm-dialog-show") != std::wstring::npos) {
+            if (g_hwnd_webbrowser) ShowWindow(g_hwnd_webbrowser, SW_HIDE);
+        } else if (msg.find(L"spirit-confirm-dialog-hide") != std::wstring::npos) {
+            if (g_hwnd_webbrowser) ShowWindow(g_hwnd_webbrowser, SW_SHOW);
         } else if (msg.find(L"key-login") != std::wstring::npos) {
             const std::wstring key = GetJsonValue(msg, L"key");
             if (!key.empty()) NavigateBrowser(BuildLoginUrl(key));
@@ -620,6 +630,60 @@ public:
                 }
             } else {
                 SetHelperText(L"无效的对象ID，必须大于10000");
+            }
+        } else if (msg.find(L"spiritCollect") != std::wstring::npos) {
+            // 精魄系统消息处理
+            const std::wstring action = GetJsonValue(msg, L"action");
+            if (action == L"open_ui") {
+                // 打开精魄系统 UI
+                if (SendSpiritOpenUIPacket()) {
+                    SetHelperText(L"精魄系统：正在获取数据...");
+                } else {
+                    SetHelperText(L"精魄系统：发送请求失败");
+                }
+            } else if (action == L"getSpirits") {
+                // 获取精魄列表
+                if (SendSpiritPresuresPacket()) {
+                    SetHelperText(L"精魄系统：正在获取精魄列表...");
+                } else {
+                    SetHelperText(L"精魄系统：获取精魄列表失败");
+                }
+            } else if (action == L"verifyPlayer") {
+                // 验证玩家信息（通过卡布号）
+                const std::wstring friendIdStr = GetJsonValue(msg, L"friendId");
+                if (!friendIdStr.empty()) {
+                    uint32_t friendId = static_cast<uint32_t>(_wtol(friendIdStr.c_str()));
+                    g_spiritCollectState.selectedFriendId = friendId;
+                    if (SendSpiritPlayerInfoPacket(friendId)) {
+                        SetHelperText(L"精魄系统：正在验证玩家信息...");
+                    } else {
+                        SetHelperText(L"精魄系统：验证玩家信息失败");
+                    }
+                }
+            } else if (action == L"sendSpirit") {
+                // 发送精魄
+                const std::wstring friendIdStr = GetJsonValue(msg, L"friendId");
+                const std::wstring eggIdStr = GetJsonValue(msg, L"eggId");
+                if (!friendIdStr.empty() && !eggIdStr.empty()) {
+                    uint32_t friendId = static_cast<uint32_t>(_wtol(friendIdStr.c_str()));
+                    uint32_t eggId = static_cast<uint32_t>(_wtol(eggIdStr.c_str()));
+                    if (SendSpiritGiftPacket(friendId, eggId)) {
+                        SetHelperText(L"精魄系统：正在发送精魄...");
+                    } else {
+                        SetHelperText(L"精魄系统：发送精魄失败");
+                    }
+                }
+            } else if (action == L"history") {
+                // 获取历史记录
+                const std::wstring typeStr = GetJsonValue(msg, L"recordType");
+                if (!typeStr.empty()) {
+                    int type = _wtoi(typeStr.c_str());
+                    if (SendSpiritHistoryPacket(type)) {
+                        SetHelperText(L"精魄系统：正在获取历史记录...");
+                    } else {
+                        SetHelperText(L"精魄系统：获取历史记录失败");
+                    }
+                }
             }
         }
 

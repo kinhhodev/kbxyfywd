@@ -502,8 +502,7 @@ void CheckForUpdatesAsync() {
         HINTERNET hSession = nullptr;
         HINTERNET hConnect = nullptr;
         HINTERNET hRequest = nullptr;
-        
-        try {
+        do {
             // 初始化 WinHTTP
             hSession = WinHttpOpen(
                 L"KBWebUI/1.0",
@@ -513,7 +512,7 @@ void CheckForUpdatesAsync() {
                 0
             );
             
-            if (!hSession) throw std::runtime_error("WinHttpOpen failed");
+            if (!hSession) break;
             
             // 设置超时时间（10秒）
             WinHttpSetTimeouts(hSession, 10000, 10000, 10000, 10000);
@@ -526,14 +525,14 @@ void CheckForUpdatesAsync() {
             urlComp.dwUrlPathLength = (DWORD)-1;
             
             if (!WinHttpCrackUrl(VERSION_CHECK_URL, 0, 0, &urlComp)) {
-                throw std::runtime_error("WinHttpCrackUrl failed");
+                break;
             }
 
             std::wstring hostName(urlComp.lpszHostName, urlComp.dwHostNameLength);
             std::wstring urlPath(urlComp.lpszUrlPath, urlComp.dwUrlPathLength);
             
             hConnect = WinHttpConnect(hSession, hostName.c_str(), urlComp.nPort, 0);
-            if (!hConnect) throw std::runtime_error("WinHttpConnect failed");
+            if (!hConnect) break;
             
             // 创建请求（支持 HTTPS）
             DWORD flags = 0;
@@ -544,7 +543,7 @@ void CheckForUpdatesAsync() {
             hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath.c_str(),
                 nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
 
-            if (!hRequest) throw std::runtime_error("WinHttpOpenRequest failed");
+            if (!hRequest) break;
 
             // 设置安全选项，忽略 SSL 证书错误
             if (urlComp.nScheme == INTERNET_SCHEME_HTTPS) {
@@ -556,12 +555,12 @@ void CheckForUpdatesAsync() {
 
             // 发送请求
             if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-                throw std::runtime_error("WinHttpSendRequest failed");
+                break;
             }
             
             // 接收响应
             if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-                throw std::runtime_error("WinHttpReceiveResponse failed");
+                break;
             }
 
             // 读取响应数据
@@ -595,10 +594,8 @@ void CheckForUpdatesAsync() {
                 PostScriptToUI(script);
             }
             
-        } catch (const std::exception&) {
-            // 版本检查失败，静默处理
-        }
-        
+        } while (false);
+
         // 清理资源
         if (hRequest) WinHttpCloseHandle(hRequest);
         if (hConnect) WinHttpCloseHandle(hConnect);

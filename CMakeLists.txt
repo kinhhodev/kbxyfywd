@@ -9,18 +9,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SCRIPTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
 set(RESOURCES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/resources)
 set(EMBEDDED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/embedded)
+set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # 添加可执行文件（Win32 窗口应用程序）
 add_executable(WebView2Demo WIN32
-    demo.cpp
-    wpe_hook.cpp
-    wpe_hook_helpers.cpp
-    utils.cpp
-    packet_parser.cpp
-    packet_builder.cpp
-    data_interceptor.cpp
-    ui_bridge.cpp
-    web_message_handler.cpp
+    ${SRC_DIR}/app/demo.cpp
+    ${SRC_DIR}/hook/wpe_hook.cpp
+    ${SRC_DIR}/hook/wpe_hook_helpers.cpp
+    ${SRC_DIR}/core/utils.cpp
+    ${SRC_DIR}/protocol/packet_parser.cpp
+    ${SRC_DIR}/protocol/packet_builder.cpp
+    ${SRC_DIR}/core/data_interceptor.cpp
+    ${SRC_DIR}/core/ui_bridge.cpp
+    ${SRC_DIR}/core/web_message_handler.cpp
 )
 
 # 设置编译器使用UTF-8编码
@@ -34,8 +36,14 @@ set(VCPKG_INCLUDE_DIR "${VCPKG_ROOT}/installed/x64-windows/include")
 set(VCPKG_LIB_DIR "${VCPKG_ROOT}/installed/x64-windows/lib")
 
 # 包含 WebView2 头文件和嵌入式数据目录
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${VCPKG_INCLUDE_DIR})
 include_directories(${EMBEDDED_DIR})
+include_directories(${INCLUDE_DIR}/activities)
+include_directories(${INCLUDE_DIR}/core)
+include_directories(${INCLUDE_DIR}/hook)
+include_directories(${INCLUDE_DIR}/internal)
+include_directories(${INCLUDE_DIR}/protocol)
 
 # 链接其他必要库
 target_link_libraries(WebView2Demo PRIVATE

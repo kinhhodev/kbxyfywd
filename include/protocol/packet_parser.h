@@ -7,16 +7,15 @@
 
 #pragma once
 
-#include <windows.h>
-#include <vector>
-#include <string>
-#include <cstdint>
 #include <unordered_map>
+#include "packet_types.h"
+#include "packet_zlib_api.h"
 
 // ============================================================================
 // 封包协议常量
 // ============================================================================
 
+#ifndef KB_PACKET_PROTOCOL_SHARED
 namespace PacketProtocol {
 
 // 封包魔法数字
@@ -30,111 +29,14 @@ constexpr size_t HEADER_SIZE = 12;  // Magic(2) + Length(2) + Opcode(4) + Params
 constexpr size_t MIN_PACKET_SIZE = HEADER_SIZE;
 
 }  // namespace PacketProtocol
+#endif
 
-// ============================================================================
-// zlib 函数导出（内存加载）
-// ============================================================================
-
-/**
- * @brief zlib 解压函数指针类型
- */
-typedef int (*ZlibUncompressFunc)(unsigned char* dest, unsigned long* destLen, 
-                                   const unsigned char* source, unsigned long sourceLen);
-
-/**
- * @brief zlib 压缩函数指针类型（默认级别）
- */
-typedef int (*ZlibCompressFunc)(unsigned char* dest, unsigned long* destLen,
-                                 const unsigned char* source, unsigned long sourceLen);
-
-/**
- * @brief zlib 压缩函数指针类型（可指定级别）
- */
-typedef int (*ZlibCompress2Func)(unsigned char* dest, unsigned long* destLen,
-                                  const unsigned char* source, unsigned long sourceLen, int level);
-
-/**
- * @brief zlib deflate 初始化函数指针类型
- */
-typedef int (*ZlibDeflateInitFunc)(void* strm, int level);
-
-/**
- * @brief zlib deflate 函数指针类型
- */
-typedef int (*ZlibDeflateFunc)(void* strm, int flush);
-
-/**
- * @brief zlib deflate 结束函数指针类型
- */
-typedef int (*ZlibDeflateEndFunc)(void* strm);
-
-/**
- * @brief zlib inflate 初始化函数指针类型
- */
-typedef int (*ZlibInflateInitFunc)(void* strm);
-
-/**
- * @brief zlib inflate 函数指针类型
- */
-typedef int (*ZlibInflateFunc)(void* strm, int flush);
-
-/**
- * @brief zlib inflate 结束函数指针类型
- */
-typedef int (*ZlibInflateEndFunc)(void* strm);
-
-/**
- * @brief 获取内存加载的 zlib uncompress 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibUncompressFunc GetZlibUncompress();
-
-/**
- * @brief 获取内存加载的 zlib compress 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibCompressFunc GetZlibCompress();
-
-/**
- * @brief 获取内存加载的 zlib inflateInit 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibInflateInitFunc GetZlibInflateInit();
-
-/**
- * @brief 获取内存加载的 zlib inflate 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibInflateFunc GetZlibInflate();
-
-/**
- * @brief 获取内存加载的 zlib inflateEnd 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibInflateEndFunc GetZlibInflateEnd();
-
-/**
- * @brief 获取内存加载的 zlib deflateInit 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibDeflateInitFunc GetZlibDeflateInit();
-
-/**
- * @brief 获取内存加载的 zlib deflate 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibDeflateFunc GetZlibDeflate();
-
-/**
- * @brief 获取内存加载的 zlib deflateEnd 函数
- * @return 函数指针，如果未初始化返回 nullptr
- */
-ZlibDeflateEndFunc GetZlibDeflateEnd();
 
 // ============================================================================
 // 操作码定义 (Opcode)
 // ============================================================================
 
+#ifndef KB_PACKET_PROTOCOL_SHARED
 namespace Opcode {
 
 // -------------------------
@@ -351,6 +253,37 @@ constexpr uint32_t HEAVEN_FURUI_SEND = 1184833;
 constexpr uint32_t HEAVEN_FURUI_BACK = 1324097;
 
 // -------------------------
+// 精魄赠送系统相关 (SpiritCollect)
+// -------------------------
+
+/** 获取精魄列表 - 发送 (OP_CLIENT_REQ_PRESURES) */
+constexpr uint32_t SPIRIT_PRESURES_SEND = 1187124;
+
+/** 获取精魄列表 - 响应 */
+constexpr uint32_t SPIRIT_PRESURES_BACK = 1330484;
+
+/** 发送精魄 - 发送 (OP_CLIENT_REQ_SEND_SPIRIT, Params=friendId) */
+constexpr uint32_t SPIRIT_SEND_SPIRIT_SEND = 1187129;
+
+/** 发送精魄 - 响应 */
+constexpr uint32_t SPIRIT_SEND_SPIRIT_BACK = 1330489;
+
+/** 验证玩家信息 - 发送 (OP_GATEWAY_RES_PLAYER_INFO, Params=friendId) */
+constexpr uint32_t SPIRIT_PLAYER_INFO_SEND = 1187585;
+
+/** 验证玩家信息 - 响应 */
+constexpr uint32_t SPIRIT_PLAYER_INFO_BACK = 1318657;
+
+/** 精魄系统活动协议 - 发送 (OP_CLIENT_ACTIVITY_QINGYANG_NEW, Params=754) */
+constexpr uint32_t SPIRIT_COLLECT_SEND = 1185429;
+
+/** 精魄系统活动协议 - 响应 */
+constexpr uint32_t SPIRIT_COLLECT_BACK = 1316501;
+
+// 精魄系统活动ID
+constexpr int SPIRIT_COLLECT_ACT_ID = 754;
+
+// -------------------------
 // 道具相关
 // -------------------------
 
@@ -422,6 +355,7 @@ constexpr uint32_t BATTLESIX_BATTLE_END_BACK = 1317125;
 constexpr uint32_t BATTLESIX_USER_OP_SEND = 1186050;
 
 }  // namespace Opcode
+#endif
 
 // ============================================================================
 // 数据结构定义
@@ -431,6 +365,7 @@ constexpr uint32_t BATTLESIX_USER_OP_SEND = 1186050;
  * @struct LingyuAttribute
  * @brief 灵玉属性
  */
+#ifndef KB_PACKET_SHARED_TYPES_DEFINED
 struct LingyuAttribute {
     int32_t nativeEnum;      ///< 属性类型枚举
     int32_t nativeValue;     ///< 属性值
@@ -742,6 +677,8 @@ inline std::string ReadStringBE(const uint8_t* data, size_t& offset) {
     return str;
 }
 
+#endif
+
 // ============================================================================
 // 封包解析器类
 // ============================================================================
@@ -883,5 +820,9 @@ std::wstring GetMapName(int mapId);
 void LoadHttpData();
 
 // 外部变量声明
+extern std::unordered_map<int, std::wstring> g_petNames;
 extern std::unordered_map<int, std::wstring> g_skillNames;
+extern std::unordered_map<int, std::wstring> g_elemNames;
+extern std::unordered_map<int, std::wstring> g_geniusNames;
 extern std::unordered_map<int, int> g_skillPowers;
+extern std::unordered_map<int, int> g_petElems;
