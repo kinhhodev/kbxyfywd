@@ -33,17 +33,7 @@
 #include "utils.h"
 #include "ui_bridge.h"
 #include "web_message_handler.h"
-
-#pragma comment(lib, "dwmapi.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "oleaut32.lib")
-#pragma comment(lib, "uuid.lib")
-#pragma comment(lib, "winmm.lib")
-#pragma comment(lib, "ComCtl32.lib")
-#pragma comment(lib, "mmdevapi.lib")
-#pragma comment(lib, "winhttp.lib")
+#include "window_messages.h"
 
 // 初始化ATL模块
 CComModule _Module;
@@ -80,7 +70,7 @@ void* g_realGetTickCount = nullptr;
 void* g_realQueryPerformanceCounter = nullptr;
 
 // 版本检查相关常量
-constexpr float CURRENT_VERSION = 1.04f;  // 当前版本：1.04
+constexpr float CURRENT_VERSION = 1.05f;  // 当前版本：1.05
 constexpr wchar_t VERSION_CHECK_URL[] = L"https://gitee.com/deepmoutains/kxby-release-detection/raw/master/data.txt";
 constexpr wchar_t UPDATE_DOWNLOAD_URL[] = L"https://wwbov.lanzout.com/b03ancytve";
 
@@ -181,7 +171,6 @@ bool g_is_packet_window_visible = false;
 RECT g_packet_window_rect = { 0 };
 
 // 自定义消息：在UI线程执行JS
-#define WM_EXECUTE_JS (WM_USER + 101)
 
 // 外部函数声明（来自 wpe_hook.cpp）
 extern BOOL SavePacketListToFile(const std::wstring& filePath);
@@ -1044,7 +1033,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             // 确保IE浏览框显示在WebView2上方
         }
         break;
-    case WM_EXECUTE_JS:
+    case AppMessage::kExecuteJs:
         if (lParam) {
             wchar_t* script = (wchar_t*)lParam;
             if (script) {
@@ -1053,11 +1042,11 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
         }
         break;
-    case WM_DECOMPOSE_COMPLETE:
+    case AppMessage::kDecomposeComplete:
         // 在UI线程中安全地调用分解完成的JavaScript回调
         ExecuteScriptInWebView2(L"if(window.onDecomposeComplete) window.onDecomposeComplete();");
         break;
-    case WM_DECOMPOSE_HEX_PACKET:
+    case AppMessage::kDecomposeHexPacket:
         // 清理十六进制封包数据内存
         {
             HexPacketData* hexData = (HexPacketData*)wParam;
@@ -1067,7 +1056,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
         }
         break;
-    case WM_DAILY_TASK_COMPLETE:
+    case AppMessage::kDailyTaskComplete:
         // 日常活动完成通知
         {
             int completedCount = (int)wParam;
@@ -1337,7 +1326,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_hWnd = CreateWindowExW(
         0,  // 普通窗口样式
         CLASS_NAME,
-        L"卡布西游浮影微端 V1.04",
+        L"卡布西游浮影微端 V1.05",
         WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 976, 813,  // 窗口宽度976，高度813
         nullptr,
