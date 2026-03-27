@@ -2,7 +2,7 @@
 """下载并解压 weeklyactivity 文件"""
 import urllib.request
 import zlib
-import os
+from pathlib import Path
 
 # 可能的文件URL列表
 URLS = [
@@ -35,8 +35,8 @@ def decompress_if_needed(data):
         return data
 
 def main():
-    output_dir = "D:/AItrace/CE/.trae/kbwebui/swf_cache"
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = Path(__file__).resolve().parents[1] / "swf_cache"
+    output_dir.mkdir(exist_ok=True)
     
     print("=" * 60)
     print("下载 weeklyactivity 文件")
@@ -51,9 +51,9 @@ def main():
             
             # 确定输出文件名
             if url.endswith('.bin'):
-                filename = os.path.basename(url).replace('.bin', '')
+                filename = Path(url).name.replace('.bin', '')
             else:
-                filename = os.path.basename(url)
+                filename = Path(url).name
             
             # 如果是二进制数据，添加.bin后缀
             try:
@@ -62,10 +62,10 @@ def main():
                 if not filename.endswith('.bin'):
                     filename += '.bin'
             
-            output_path = os.path.join(output_dir, filename)
+            output_path = output_dir / filename
             with open(output_path, 'wb') as f:
                 f.write(data)
-            print(f"✓ 已保存: {output_path}")
+            print(f"OK 已保存: {output_path.as_posix()}")
             print()
     
     print("=" * 60)

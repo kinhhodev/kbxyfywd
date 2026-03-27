@@ -415,6 +415,10 @@ enum BattleSixFlowStage {
 
 std::atomic<int> g_battleSixFlowStage{BATTLESIX_FLOW_IDLE};
 std::atomic<unsigned long long> g_battleSixFlowToken{0};
+constexpr uint32_t BATTLE_SIX_SETTLEMENT_TEXT_BACK = 1317130;  // 万妖盛会胜负文本弹窗回包
+constexpr uint32_t BATTLE_SIX_SETTLEMENT_PVP_BACK = 1317154;   // 万妖盛会 PVP 结算弹窗回包
+std::atomic<bool> g_battleSixPostSettlementEndSent{false};
+std::atomic<bool> g_battleSixReadySupplementSent{false};
 
 unsigned long long AdvanceBattleSixFlowStage(int stage) {
     g_battleSixFlowStage = stage;
@@ -449,6 +453,8 @@ void ScheduleBattleSixRecoveryViaCombatInfo(DWORD delayMs) {
         delete pDelay;
     }
 }
+
+static BOOL SendBattleReadyPacket();
 
 void ArmBattleSixFlowWatchdog(
     DWORD timeoutMs,
@@ -2476,6 +2482,28 @@ int WINAPI HookedRecv(SOCKET s, char* buf, int len, int flags) {
                 packetsToFilter.push_back(i);
             }
         }
+
+        // 万妖盛会自动流程中，监听两类结算弹窗回包：
+        // 1317130 = battleNewExpBack 触发的胜负文本窗
+        // 1317154 = battleFSPK 触发的 PVP 结算窗
+        const bool isBattleSixFlowActive = g_battleSixAuto.IsInBattle() || g_battleSixAuto.IsAutoMatching();
+        const bool isBattleSixSettlementPacket =
+            gp.opcode == BATTLE_SIX_SETTLEMENT_TEXT_BACK ||
+            gp.opcode == BATTLE_SIX_SETTLEMENT_PVP_BACK;
+        if (isBattleSixFlowActive && isBattleSixSettlementPacket) {
+            if (!g_battleSixPostSettlementEndSent.exchange(true)) {
+                HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+                    Sleep(100);
+                    SendBattleSixEndPacket();
+                    return 0;
+                }, nullptr, 0, nullptr);
+                if (hThread) {
+                    CloseHandle(hThread);
+                } else {
+                    g_battleSixPostSettlementEndSent = false;
+                }
+            }
+        }
         
         // 2. MD5 图片验证自动回复（不屏蔽，只自动回复）
         if (gp.opcode == Opcode::BATTLE_MD5_CHECK) {
@@ -2950,19 +2978,61 @@ void ResponseDispatcher::InitializeDefaultHandlers() {
     Clear();
 
     const ResponseHandler processBattle = [](const GamePacket& gp) {
+        // 共享战斗包先走通用解析，再按当前活动状态补专用流程。
+        PacketParser::ProcessBattlePacket(gp);
+
+        if (gp.opcode == Opcode::BATTLE_START) {
+            if (g_battleSixAuto.IsAutoMatching() &&
+                g_battleSixFlowStage.load() != BATTLESIX_FLOW_IDLE) {
+                ResetBattleSixFlowState();
+            }
+
+            if (g_battleSixAuto.IsInBattle() &&
+                g_battleSixAuto.IsAutoMatching() &&
+                !g_battleSixReadySupplementSent.exchange(true)) {
+                HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+                    Sleep(800);
+                    if (g_battleSixAuto.IsInBattle()) {
+                        SendBattleReadyPacket();
+                    }
+                    return 0;
+                }, nullptr, 0, nullptr);
+                if (hThread) {
+                    CloseHandle(hThread);
+                } else {
+                    g_battleSixReadySupplementSent = false;
+                }
+            }
+
+            if (g_shuangtaiAuto.IsRunning()) {
+                ProcessShuangTaiBattleStartResponse(gp);
+            }
+            return;
+        }
+
+        if (gp.opcode == Opcode::BATTLE_ROUND_START) {
+            if (g_shuangtaiAuto.IsRunning()) {
+                ProcessShuangTaiBattleRoundStartResponse(gp);
+            }
+            return;
+        }
+
+        if (gp.opcode == Opcode::BATTLE_ROUND) {
+            if (g_shuangtaiAuto.IsRunning()) {
+                ProcessShuangTaiBattleRoundResultResponse(gp);
+            }
+            return;
+        }
+
         if (gp.opcode == Opcode::BATTLE_END) {
             if (g_battleSixAuto.IsInBattle()) {
                 ProcessBattleSixBattleEndResponse(gp);
-                return;
             }
 
             if (g_shuangtaiAuto.IsRunning()) {
                 ProcessShuangTaiBattleEndResponse(gp);
-                return;
             }
         }
-
-        PacketParser::ProcessBattlePacket(gp);
     };
     const ResponseHandler processLingyu = [](const GamePacket& gp) {
         PacketParser::ProcessLingyuPacket(gp);
@@ -3025,15 +3095,6 @@ void ResponseDispatcher::InitializeDefaultHandlers() {
     registerOpcode(Opcode::BATTLESIX_MATCH_BACK, ProcessBattleSixMatchResponse);
     registerOpcode(Opcode::BATTLESIX_PREPARE_COMBAT_BACK, ProcessBattleSixPrepareCombatResponse);
     registerOpcode(Opcode::BATTLESIX_REQ_START_BACK, ProcessBattleSixReqStartResponse);
-    registerOpcode(Opcode::BATTLESIX_BATTLE_START_BACK, ProcessBattleSixBattleStartResponse);
-    registerOpcode(Opcode::BATTLESIX_BATTLE_ROUND_START_BACK, ProcessBattleSixBattleRoundStartResponse);
-    registerOpcode(Opcode::BATTLESIX_BATTLE_ROUND_RESULT_BACK, ProcessBattleSixBattleRoundResultResponse);
-    registerOpcode(Opcode::BATTLESIX_BATTLE_END_BACK, ProcessBattleSixBattleEndResponse);
-
-    registerOpcode(ShuangTai::BATTLE_START_BACK, ProcessShuangTaiBattleStartResponse);
-    registerOpcode(ShuangTai::BATTLE_ROUND_START_BACK, ProcessShuangTaiBattleRoundStartResponse);
-    registerOpcode(ShuangTai::BATTLE_ROUND_RESULT_BACK, ProcessShuangTaiBattleRoundResultResponse);
-    registerOpcode(ShuangTai::BATTLE_END_BACK, ProcessShuangTaiBattleEndResponse);
 
     // 精魄系统响应处理
     registerOpcode(Opcode::SPIRIT_PRESURES_BACK, ProcessSpiritPresuresResponse);
@@ -7164,6 +7225,7 @@ void BattleSixAutoBattle::StartBattle() {
     m_isInBattle = true;
     m_currentSpiritIndex = 0;
     m_currentSkillIndex = 0;
+    g_battleSixPostSettlementEndSent = false;
     g_battleSixSwitchTargetId = -1;
     g_battleSixSwitchRetryCount = 0;
     UIBridge::Instance().UpdateHelperText(L"战斗开始");
@@ -7692,7 +7754,8 @@ BOOL SendBattleSixReqStartPacket() {
         .SetParams(0)
         .WriteBytes(body)
         .Build();
-    
+
+    g_battleSixReadySupplementSent = false;
     return SendPacket(0, packet.data(), packet.size());
 }
 
@@ -7730,6 +7793,15 @@ BOOL SendBattleSixEndPacket() {
         .WriteBytes(body)
         .Build();
     
+    return SendPacket(0, packet.data(), packet.size());
+}
+
+static BOOL SendBattleReadyPacket() {
+    auto packet = PacketBuilder()
+        .SetOpcode(Opcode::BATTLE_READY)
+        .SetParams(0)
+        .Build();
+
     return SendPacket(0, packet.data(), packet.size());
 }
 
@@ -7782,9 +7854,6 @@ void ProcessBattleSixReqStartResponse(const GamePacket& packet) {
 
 void ProcessBattleSixBattleStartResponse(const GamePacket& packet) {
     ResetBattleSixFlowState();
-
-    // 先调用通用战斗处理（更新 UI、解析精灵数据等）
-    PacketParser::ProcessBattlePacket(packet);
     
     // 注意：万妖盛会使用通用战斗 Opcode（1317120）
     // 精灵数据已经在 packet_parser.cpp 的 ProcessBattlePacket 中转换到 g_currentBattle
@@ -7848,6 +7917,21 @@ void ProcessBattleSixBattleStartResponse(const GamePacket& packet) {
             g_battleSixAuto.SetEnemyUniqueId(battleData.otherPets[battleData.otherActiveIndex].uniqueId);
         }
     }
+
+    if (!g_battleSixReadySupplementSent.exchange(true)) {
+        HANDLE hThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+            Sleep(800);
+            if (g_battleSixAuto.IsInBattle()) {
+                SendBattleReadyPacket();
+            }
+            return 0;
+        }, nullptr, 0, nullptr);
+        if (hThread) {
+            CloseHandle(hThread);
+        } else {
+            g_battleSixReadySupplementSent = false;
+        }
+    }
 }
 
 void ProcessBattleSixCombatInfoResponse(const GamePacket& packet) {
@@ -7877,47 +7961,17 @@ void ProcessBattleSixCombatInfoResponse(const GamePacket& packet) {
 }
 
 void ProcessBattleSixBattleRoundStartResponse(const GamePacket& packet) {
-    // 先调用通用战斗处理（更新 UI、处理 buf 回合等）
-    PacketParser::ProcessBattlePacket(packet);
-
-    if (!g_battleSixAuto.IsAutoBattleEnabled()) {
-        return;
-    }
-
-    bool currentSpiritDead = false;
-    const int currentIndex = g_battleSixAuto.GetCurrentSpiritIndex();
-    auto& mySpirits = g_battleSixAuto.GetMySpirits();
-    if (currentIndex >= 0 && currentIndex < static_cast<int>(mySpirits.size())) {
-        currentSpiritDead = mySpirits[currentIndex].isDead || mySpirits[currentIndex].hp <= 0;
-    }
-
-    if (currentSpiritDead) {
-        g_battleSixAuto.OnBattleRoundStart();
-        return;
-    }
-
-    int countdown = -1;
-    if (packet.body.size() >= 4) {
-        size_t offset = 0;
-        countdown = ReadInt32LE(packet.body.data(), offset);
-    }
-
-    if (countdown <= 0) {
+    // 回合开始包到达即认为可出招，不等倒计时归零。
+    if (g_battleSixAuto.IsInBattle() && g_battleSixAuto.IsAutoBattleEnabled()) {
         g_battleSixAuto.OnBattleRoundStart();
     }
 }
 
 void ProcessBattleSixBattleRoundResultResponse(const GamePacket& packet) {
-    // 先调用通用战斗处理（更新 UI、解析回合结果等）
-    PacketParser::ProcessBattlePacket(packet);
-    
     g_battleSixAuto.OnBattleRoundResult(packet);
 }
 
 void ProcessBattleSixBattleEndResponse(const GamePacket& packet) {
-    // 先调用通用战斗处理（更新 UI、发送战斗结束提示等）
-    PacketParser::ProcessBattlePacket(packet);
-    
     // 记录战斗结果
     bool wasInBattle = g_battleSixAuto.IsInBattle();
     bool wasAutoMatching = g_battleSixAuto.IsAutoMatching();

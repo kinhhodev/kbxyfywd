@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <mutex>
 #include <unordered_map>
-#pragma comment(lib, "wininet.lib")
 
 // 轻量级ZIP解压辅助函数（纯内存，使用已加载的zlib）
 #include "embedded/minizip_helper.h"
@@ -1502,52 +1501,21 @@ start_done:
             }
         }
 
-        // 万妖盛会自动战斗 - 在战斗回合开始时检查是否可以出招
-        // 根据AS3代码，body中的值表示倒计时，只有当值<=0时才能出招
-        bool isInBattle = g_battleSixAuto.IsInBattle();
-        bool isAutoBattleEnabled = g_battleSixAuto.IsAutoBattleEnabled();
-        
-        if (isInBattle && isAutoBattleEnabled) {
-            // 读取body中的倒计时值（第一个int32）
-            int countdown = -1; // 默认-1表示可以出招
-            if (packet.body.size() >= 4) {
-                size_t offset = 0;
-                countdown = ReadInt32LE(packet.body.data(), offset);
-            }
-            
-            // PVP中：countdown > 0表示等待对方，countdown <= 0表示可以出招
-            // 第一回合通常countdown=-1或0，可以直接出招
-            if (countdown <= 0) {
-                g_battleSixAuto.OnBattleRoundStart();
-            }
+        // 万妖盛会自动战斗不应依赖回合倒计时是否归零。
+        // 原始 SWF 在 showCountTime(value) 中会直接把 canBattle 置为 true，
+        // 因此只要回合开始包到达，就可以立即尝试出招或切换精灵。
+        if (g_battleSixAuto.IsInBattle() && g_battleSixAuto.IsAutoBattleEnabled()) {
+            g_battleSixAuto.OnBattleRoundStart();
         }
     }
     else if (packet.opcode == Opcode::BATTLE_CHANGE_SPIRIT_ROUND) {
-        // 收到切换精灵回合封包，检测切换是否成功
-        int targetId = g_battleSixSwitchTargetId.load();
-        if (targetId > 0 && g_battleSixAuto.IsInBattle()) {
+        // AS3 中该包表示进入切换精灵回合，不是切换成功回包。
+        if (g_battleSixAuto.IsInBattle() && g_battleSixAuto.IsAutoBattleEnabled()) {
             int currentIndex = g_battleSixAuto.GetCurrentSpiritIndex();
-            if (currentIndex >= 0 && currentIndex < (int)g_battleSixAuto.GetMySpirits().size()) {
-                int currentUniqueId = g_battleSixAuto.GetMySpirits()[currentIndex].uniqueId;
-                
-                if (currentUniqueId == targetId) {
-                    // 切换成功
-                    g_battleSixSwitchTargetId = -1;
-                    g_battleSixSwitchRetryCount = 0;
-                } else {
-                    // 切换失败，重试
-                    int retryCount = g_battleSixSwitchRetryCount.load();
-                    if (retryCount < 3) {
-                        g_battleSixSwitchRetryCount = retryCount + 1;
-                        // 延迟2秒后重试
-                        int uniqueId = targetId;
-                        CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
-                            int id = (int)(INT_PTR)lpParam;
-                            Sleep(2000);
-                            SendBattleSixUserOpPacket(1, id, 0);
-                            return 0;
-                        }, (LPVOID)(INT_PTR)uniqueId, 0, nullptr);
-                    }
+            if (currentIndex >= 0 && currentIndex < static_cast<int>(g_battleSixAuto.GetMySpirits().size())) {
+                const auto& currentSpirit = g_battleSixAuto.GetMySpirits()[currentIndex];
+                if (currentSpirit.isDead || currentSpirit.hp <= 0) {
+                    g_battleSixAuto.OnBattleRoundStart();
                 }
             }
         }
@@ -1655,7 +1623,7 @@ start_done:
                                 g_battleSixAuto.GetMySpirits()[currentIndex].isDead = isDead;
                                 
                                 // 如果当前精灵死亡，延迟1秒后发送切换封包
-                                if (isDead) {
+                                if (g_battleSixSwitchRetryCount.load() < 0 && isDead) {  // BattleSix 切怪时机改为 round start
                                     int nextIndex = g_battleSixAuto.FindNextAliveSpirit(currentIndex + 1);
                                     
                                     if (nextIndex >= 0) {
@@ -2051,6 +2019,8 @@ start_done:
 
             // 更新活跃索引
             if (isMySideSwitching) {
+                g_battleSixSwitchTargetId = -1;
+                g_battleSixSwitchRetryCount = 0;
                 for (size_t i = 0; i < g_currentBattle.myPets.size(); ++i) {
                     if (g_currentBattle.myPets[i].uniqueId == uniqueId) {
                         g_currentBattle.myActiveIndex = (int)i;
@@ -2226,7 +2196,7 @@ void PacketParser::ProcessMonsterPacket(const GamePacket& packet) {
     // 性格值对应属性映射
     auto getGeniusName = [](int32_t geniusValue) -> std::pair<std::wstring, int32_t> {
         // 性格值范围：-2到+2，对应属性加成
-        static const std::vector<std::wstring> attrNames = {
+        static const wchar_t* const attrNames[] = {
             L"攻击", L"防御", L"法术", L"抗性", L"体力", L"速度"
         };
         // 简化：根据geniusValue判断主要加成属性

@@ -8,11 +8,9 @@
 #include "ui_bridge.h"
 
 // Windows 自定义消息
-#define WM_EXECUTE_JS (WM_USER + 101)
+#include "window_messages.h"
 
 // 外部声明：执行 JavaScript 的函数（在 demo.cpp 中定义）
-extern HRESULT WINAPI ExecuteScriptInWebView2(const WCHAR* script);
-extern HWND g_hWnd;
 
 // ============================================================================
 // 单例实现
@@ -94,7 +92,7 @@ void UIBridge::ExecuteJS(const std::wstring& script) {
 
     wmemcpy_s(pScript, len, script.c_str(), len);
 
-    if (!PostMessage(m_hwnd, WM_EXECUTE_JS, 0, (LPARAM)pScript)) {
+    if (!PostMessage(m_hwnd, AppMessage::kExecuteJs, 0, (LPARAM)pScript)) {
         delete[] pScript;
     }
 }

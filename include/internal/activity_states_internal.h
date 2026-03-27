@@ -109,6 +109,37 @@ struct Act791State : ActivityState {
     }
 };
 
+struct SeaBattleState : ActivityState {
+    std::atomic<int> promptFlag{0};
+    std::atomic<int> strengthenPopWinFlag{0};
+    std::atomic<int> medalNum{0};
+    std::atomic<int> bestRecord{0};
+    std::atomic<int> finishedNum{0};
+    std::atomic<int> myScore{0};
+    std::atomic<int> star{2};
+    std::atomic<int> lastResult{0};
+    std::atomic<int> lastServerScore{0};
+    std::atomic<int> lastScoreMax{0};
+    std::atomic<bool> useSweep{false};
+    std::atomic<bool> sweepSuccess{false};
+
+    void Reset() override {
+        ActivityState::Reset();
+        promptFlag = 0;
+        strengthenPopWinFlag = 0;
+        medalNum = 0;
+        bestRecord = 0;
+        finishedNum = 0;
+        myScore = 0;
+        star = 2;
+        lastResult = 0;
+        lastServerScore = 0;
+        lastScoreMax = 0;
+        useSweep = false;
+        sweepSuccess = false;
+    }
+};
+
 enum HorseRoomStatus {
     HORSE_ROOM_FREE = 0,
     HORSE_ROOM_READY = 1,
@@ -187,6 +218,7 @@ struct HorseCompetitionState : ActivityState {
     std::atomic<bool> isSettling{false};
     std::atomic<bool> receivedEndGame{false};
     std::atomic<bool> localFinished{false};
+    std::atomic<bool> abnormalRoundEnd{false};
     std::atomic<int> phase{HORSE_PHASE_IDLE};
 
     std::atomic<int> cnt{0};
@@ -231,6 +263,7 @@ struct HorseCompetitionState : ActivityState {
         isSettling = false;
         receivedEndGame = false;
         localFinished = false;
+        abnormalRoundEnd = false;
         phase = HORSE_PHASE_IDLE;
         cnt = 0;
         isRide = 0;
@@ -273,6 +306,7 @@ public:
     Act778State& GetAct778State();
     Act793State& GetAct793State();
     Act791State& GetAct791State();
+    SeaBattleState& GetSeaBattleState();
     HorseCompetitionState& GetHorseCompetitionState();
     void ResetAll();
 
@@ -287,5 +321,6 @@ private:
     Act778State m_act778State;
     Act793State m_act793State;
     Act791State m_act791State;
+    SeaBattleState m_seaBattleState;
     HorseCompetitionState m_horseCompetitionState;
 };

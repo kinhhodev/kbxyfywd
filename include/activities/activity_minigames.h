@@ -72,6 +72,39 @@ BOOL SendAct791SweepPacket();
 BOOL SendOneKeyAct791Packet(bool useSweep = false, int targetScore = Act791::TARGET_SCORE);
 void ProcessAct791Response(const GamePacket& packet);
 
+namespace Act782 {
+constexpr int ACTIVITY_ID = 782;
+constexpr int PASS_SCORE = 200;
+constexpr int TARGET_SCORE = 400;
+}  // namespace Act782
+
+BOOL SendAct782Packet(const std::string& operation, const std::vector<int32_t>& bodyValues = {});
+BOOL SendAct782OpenUIPacket();
+BOOL SendAct782StartGamePacket(int ruleFlag);
+BOOL SendAct782EndGamePacket(int score);
+BOOL SendAct782SweepInfoPacket();
+BOOL SendAct782SweepPacket();
+BOOL SendOneKeyAct782Packet(bool useSweep = false, int targetScore = Act782::TARGET_SCORE);
+void ProcessAct782Response(const GamePacket& packet);
+
+namespace SeaBattle {
+constexpr int ACTIVITY_ID = 653;
+constexpr int PASS_SCORE = 300;
+constexpr int TARGET_SCORE = 1000;
+constexpr uint32_t EXTRA_OPCODE = 1184812;
+constexpr int EXTRA_PARAMS = 3;
+constexpr int EXTRA_TASK_ID = 4039001;
+}  // namespace SeaBattle
+
+BOOL SendSeaBattlePacket(const std::string& operation, const std::vector<int32_t>& bodyValues = {});
+BOOL SendSeaBattleUIInfoPacket();
+BOOL SendSeaBattleStartGamePacket(int promptFlag = 0);
+BOOL SendSeaBattleEndGamePacket(int score);
+BOOL SendSeaBattleSweepInfoPacket();
+BOOL SendSeaBattleSweepPacket();
+BOOL SendOneKeySeaBattlePacket(bool useSweep = false);
+void ProcessSeaBattleResponse(const GamePacket& packet);
+
 namespace HeavenFurui {
 constexpr int ACTIVITY_ID = 900;
 constexpr int OP_QUERY = 1;

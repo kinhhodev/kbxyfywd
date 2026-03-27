@@ -15,12 +15,13 @@ set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # 添加可执行文件（Win32 窗口应用程序）
 add_executable(WebView2Demo WIN32
     ${SRC_DIR}/app/demo.cpp
+    ${SRC_DIR}/app/app_host.cpp
     ${SRC_DIR}/hook/wpe_hook.cpp
+    ${SRC_DIR}/hook/horse_competition.cpp
     ${SRC_DIR}/hook/wpe_hook_helpers.cpp
     ${SRC_DIR}/core/utils.cpp
     ${SRC_DIR}/protocol/packet_parser.cpp
     ${SRC_DIR}/protocol/packet_builder.cpp
-    ${SRC_DIR}/core/data_interceptor.cpp
     ${SRC_DIR}/core/ui_bridge.cpp
     ${SRC_DIR}/core/web_message_handler.cpp
 )
@@ -47,16 +48,23 @@ include_directories(${INCLUDE_DIR}/protocol)
 
 # 链接其他必要库
 target_link_libraries(WebView2Demo PRIVATE
+    ComCtl32.lib
+    Comdlg32.lib
+    dwmapi.lib
+    mmdevapi.lib
+    oleaut32.lib
     ws2_32.lib
     ole32.lib
     shell32.lib
     shlwapi.lib
+    uuid.lib
     user32.lib
     advapi32.lib
     msimg32.lib
     gdi32.lib
     winhttp.lib
     wininet.lib
+    winmm.lib
     "${VCPKG_LIB_DIR}/MemoryModule.lib"
     "${VCPKG_LIB_DIR}/zlib.lib"
 )
