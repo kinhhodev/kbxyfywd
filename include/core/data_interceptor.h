@@ -1,9 +1,13 @@
 /**
  * @file data_interceptor.h
- * @brief data 文件拦截和修改模块
+ * @brief Data file interception and modification module
+ * @brief (VI) Module chặn và chỉnh sửa file data
  * 
- * 拦截游戏下载的 data 文件，为所有妖怪添加 display 属性
- * 使所有妖怪在战斗中都能显示技能 PP 值
+ * Intercepts the data file downloaded by the game and adds the `display` attribute.
+ * This allows the UI to show skill PP values in battle.
+ *
+ * (VI) Chặn file data game tải về và thêm thuộc tính `display`.
+ * (VI) Nhằm hiển thị PP kỹ năng trong chiến đấu.
  */
 
 #pragma once
@@ -16,31 +20,34 @@
 namespace DataInterceptor {
 
 /**
- * @brief 初始化 data 拦截器
- * @return 初始化是否成功
+ * @brief Initialize the data interceptor
+ * @brief (VI) Khởi tạo data interceptor
+ * @return Whether initialization succeeded
  */
 BOOL Initialize();
 
 /**
- * @brief 清理 data 拦截器
+ * @brief Cleanup the data interceptor
+ * @brief (VI) Dọn dẹp data interceptor
  */
 VOID Cleanup();
 
 /**
- * @brief 检查 URL 是否为 data 文件
- * @param url 请求的 URL
- * @return 是否为 data 文件
+ * @brief Check whether the URL is a data file request
+ * @brief (VI) Kiểm tra URL có phải request file data hay không
+ * @param url Request URL
+ * @return Whether it is a data file
  */
 BOOL IsDataUrl(const char* url);
 
 /**
- * @brief 处理 HTTP 响应数据
- * @param url 请求的 URL
- * @param pData 原始数据
- * @param dwSize 数据大小
- * @param pModifiedData 输出：修改后的数据
- * @param pdwModifiedSize 输出：修改后的大小
- * @return 是否需要替换数据
+ * @brief Process HTTP response data
+ * @brief (VI) Xử lý dữ liệu phản hồi HTTP
+ * @param url Request URL
+ * @param pData Original data
+ * @param dwSize Data size
+ * @param modifiedData Output: modified data
+ * @return Whether the data should be replaced
  */
 BOOL ProcessHttpResponse(
     const char* url,
@@ -50,17 +57,19 @@ BOOL ProcessHttpResponse(
 );
 
 /**
- * @brief 为 XML 中的所有 spirit 节点添加 display 属性
- * @param xmlData XML 数据（已解压）
- * @return 修改后的 XML 数据
+ * @brief Add the `display` attribute to all `spirit` nodes in the XML
+ * @brief (VI) Thêm thuộc tính `display` cho mọi node `spirit` trong XML
+ * @param xmlData XML data (already decompressed)
+ * @return Modified XML data
  */
 std::vector<char> AddDisplayAttribute(const std::vector<char>& xmlData);
 
 /**
- * @brief 解压 zlib 压缩的数据
- * @param compressedData 压缩数据
- * @param decompressedData 输出：解压后的数据
- * @return 解压是否成功
+ * @brief Decompress zlib-compressed data
+ * @brief (VI) Giải nén dữ liệu nén zlib
+ * @param compressedData Compressed data
+ * @param decompressedData Output: decompressed data
+ * @return Whether decompression succeeded
  */
 BOOL DecompressData(
     const std::vector<BYTE>& compressedData,
@@ -68,10 +77,11 @@ BOOL DecompressData(
 );
 
 /**
- * @brief 压缩数据
- * @param data 原始数据
- * @param compressedData 输出：压缩后的数据
- * @return 压缩是否成功
+ * @brief Compress data
+ * @brief (VI) Nén dữ liệu
+ * @param data Raw data
+ * @param compressedData Output: compressed data
+ * @return Whether compression succeeded
  */
 BOOL CompressData(
     const std::vector<BYTE>& data,

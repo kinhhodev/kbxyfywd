@@ -1,9 +1,13 @@
 /**
  * @file packet_builder.h
- * @brief 封包构建器 - 统一封包构造接口
+ * @brief Packet builder - unified packet construction interface
+ * @brief (VI) Packet builder - thống nhất cách dựng packet
  * 
- * 提供链式调用的封包构造接口，自动处理小端序编码
- * 重构目标：减少 50% 的封包构造重复代码
+ * Provides a fluent/chained packet-construction API and automatically encodes in little-endian.
+ * Refactor goal: reduce ~50% of duplicated packet construction code.
+ *
+ * (VI) Cung cấp API dựng packet theo kiểu chain, tự encode little-endian.
+ * (VI) Mục tiêu refactor: giảm ~50% code dựng packet lặp lại.
  */
 
 #pragma once
@@ -16,9 +20,11 @@
 
 /**
  * @class PacketBuilder
- * @brief 封包构建器
+ * @brief Packet builder
+ * @brief (VI) Trình dựng packet
  * 
- * 使用链式调用构造游戏封包，自动处理小端序编码
+ * Builds game packets via chained calls and automatically handles little-endian encoding.
+ * (VI) Dựng packet game bằng chain call và tự xử lý little-endian.
  * 
  * @example
  * @code
@@ -35,146 +41,178 @@ public:
     ~PacketBuilder() = default;
 
     // ================================
-    // 头部设置方法
+    // Header setters
+    // (VI) Thiết lập header
     // ================================
 
     /**
-     * @brief 设置 Magic（默认为 0x5344 "SD"）
-     * @param magic Magic 值
-     * @return 引用自身，支持链式调用
+     * @brief Set Magic (defaults to 0x5344 "SD")
+     * @brief (VI) Đặt Magic (mặc định 0x5344 "SD")
+     * @param magic Magic value
+     * @return Self reference for chaining
      */
     PacketBuilder& SetMagic(uint16_t magic);
 
     /**
-     * @brief 设置 Opcode
-     * @param opcode 操作码
-     * @return 引用自身，支持链式调用
+     * @brief Set opcode
+     * @brief (VI) Đặt opcode
+     * @param opcode Opcode
+     * @return Self reference for chaining
      */
     PacketBuilder& SetOpcode(uint32_t opcode);
 
     /**
-     * @brief 设置 Params
-     * @param params 参数值
-     * @return 引用自身，支持链式调用
+     * @brief Set params
+     * @brief (VI) Đặt params
+     * @param params Params value
+     * @return Self reference for chaining
      */
     PacketBuilder& SetParams(uint32_t params);
 
     // ================================
-    // Body 写入方法
+    // Body writers
+    // (VI) Ghi Body
     // ================================
 
     /**
-     * @brief 写入字符串（带小端序长度前缀）
-     * @param str 字符串内容
-     * @return 引用自身，支持链式调用
+     * @brief Write a string (with a little-endian length prefix)
+     * @brief (VI) Ghi chuỗi (kèm prefix độ dài little-endian)
+     * @param str String content
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteString(const std::string& str);
 
     /**
-     * @brief 写入 int32 值（小端序）
-     * @param value 整数值
-     * @return 引用自身，支持链式调用
+     * @brief Write an int32 (little-endian)
+     * @brief (VI) Ghi int32 (little-endian)
+     * @param value Integer value
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteInt32(int32_t value);
 
     /**
-     * @brief 写入 uint32 值（小端序）
-     * @param value 整数值
-     * @return 引用自身，支持链式调用
+     * @brief Write a uint32 (little-endian)
+     * @brief (VI) Ghi uint32 (little-endian)
+     * @param value Integer value
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteUInt32(uint32_t value);
 
     /**
-     * @brief 写入 int16 值（小端序）
-     * @param value 整数值
-     * @return 引用自身，支持链式调用
+     * @brief Write an int16 (little-endian)
+     * @brief (VI) Ghi int16 (little-endian)
+     * @param value Integer value
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteInt16(int16_t value);
 
     /**
-     * @brief 写入 uint16 值（小端序）
-     * @param value 整数值
-     * @return 引用自身，支持链式调用
+     * @brief Write a uint16 (little-endian)
+     * @brief (VI) Ghi uint16 (little-endian)
+     * @param value Integer value
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteUInt16(uint16_t value);
 
     /**
-     * @brief 写入单字节
-     * @param value 字节值
-     * @return 引用自身，支持链式调用
+     * @brief Write a single byte
+     * @brief (VI) Ghi 1 byte
+     * @param value Byte value
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteByte(uint8_t value);
 
     /**
-     * @brief 写入字节数组
-     * @param data 字节数组
-     * @return 引用自身，支持链式调用
+     * @brief Write a byte array
+     * @brief (VI) Ghi mảng byte
+     * @param data Byte array
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteBytes(const std::vector<uint8_t>& data);
 
     /**
-     * @brief 写入 int32 数组（每个元素小端序）
-     * @param values 整数数组
-     * @return 引用自身，支持链式调用
+     * @brief Write an int32 array (each element little-endian)
+     * @brief (VI) Ghi mảng int32 (mỗi phần tử little-endian)
+     * @param values Integer array
+     * @return Self reference for chaining
      */
     PacketBuilder& WriteInt32Array(const std::vector<int32_t>& values);
 
     // ================================
-    // 构建方法
+    // Build methods
+    // (VI) Hàm build
     // ================================
 
     /**
-     * @brief 构建最终封包
-     * @return 封包字节数组
+     * @brief Build the final packet
+     * @brief (VI) Build packet cuối
+     * @return Packet bytes
      */
     std::vector<uint8_t> Build();
 
     /**
-     * @brief 清空缓冲区，重新开始构建
+     * @brief Clear the buffer and start building from scratch
+     * @brief (VI) Xóa buffer và bắt đầu build lại
      */
     void Reset();
 
     // ================================
-    // 工具方法
+    // Utility methods
+    // (VI) Hàm tiện ích
     // ================================
 
     /**
-     * @brief 获取当前 Body 长度
-     * @return Body 长度
+     * @brief Get current body length
+     * @brief (VI) Lấy độ dài body hiện tại
+     * @return Body length
      */
     size_t GetBodyLength() const { return m_body.size(); }
 
 private:
-    // 头部字段
-    uint16_t m_magic;     ///< Magic 值（默认 0x5344）
+    // Header fields
+    // (VI) Các field header
+    uint16_t m_magic;     ///< Magic value (default: 0x5344)
+                          ///< (VI) Giá trị Magic (mặc định: 0x5344)
     uint32_t m_opcode;    ///< Opcode
     uint32_t m_params;    ///< Params
 
-    // Body 缓冲区
-    std::vector<uint8_t> m_body;  ///< Body 数据
+    // Body buffer
+    // (VI) Buffer body
+    std::vector<uint8_t> m_body;  ///< Body bytes
+                                  ///< (VI) Dữ liệu body (bytes)
 
-    // 状态标志
-    bool m_headerSet;     ///< 头部是否已设置
+    // State flags
+    // (VI) Cờ trạng thái
+    bool m_headerSet;     ///< Whether the header has been set
+                          ///< (VI) Header đã được set hay chưa
 };
 
 // ================================
-// 快捷构造函数
+// Convenience builders
+// (VI) Hàm dựng nhanh
 // ================================
 
 /**
- * @brief 快速构造活动操作封包（通用格式）
- * @param opcode 操作码
- * @param activityId 活动ID
- * @param operation 操作字符串
- * @param bodyValues Body值列表
- * @return 完整封包
+ * @brief Quickly build an activity-operation packet (common format)
+ * @brief (VI) Dựng nhanh packet thao tác activity (định dạng chung)
+ * @param opcode Opcode
+ * @param activityId Activity ID
+ * @param operation Operation string
+ * @param bodyValues Body value list
+ * @return Full packet bytes
  * 
- * 封包格式：
+ * Packet format:
+ * (VI) Định dạng packet:
  * - Magic: 0x5344
- * - Length: Body长度
- * - Opcode: 指定值
- * - Params: 活动ID
- * - Body: [字符串长度(2B)][字符串内容][int32值们]
+ * - Length: body length
+ * - Opcode: specified value
+ * - Params: activity ID
+ * - Body: [string length(2B)][string bytes][int32 values...]
+ *
+ * (VI) - Length: độ dài body
+ * (VI) - Opcode: giá trị chỉ định
+ * (VI) - Params: ID activity
+ * (VI) - Body: [độ dài chuỗi(2B)][bytes chuỗi][các giá trị int32...]
  */
 std::vector<uint8_t> BuildActivityPacket(
     uint32_t opcode,

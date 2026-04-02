@@ -7,33 +7,41 @@
 using ResponseHandler = void (*)(const GamePacket&);
 
 // ============================================================================
-// 响应等待器（内部使用）
+// Response waiter (internal use)
+// Bộ chờ phản hồi (chỉ dùng nội bộ)
 // ============================================================================
 
 /**
  * @class ResponseWaiter
- * @brief 响应等待器（内部使用，用于SendPacket自动等待响应）
+ * @brief Response waiter (internal use, used by SendPacket to wait for replies)
+ * @brief (VI) Bộ chờ phản hồi (nội bộ, dùng cho SendPacket tự chờ phản hồi)
  *
- * 使用条件变量实现高效的事件通知，替代Sleep轮询。
- * 优化：只在有等待线程时才加锁，避免对每个封包都加锁。
+ * Uses a condition variable for efficient event notification instead of Sleep polling.
+ * Optimization: only locks when there are waiting threads, avoiding per-packet locking.
+ *
+ * (VI) Dùng condition variable để thông báo sự kiện hiệu quả, thay cho polling bằng Sleep.
+ * (VI) Tối ưu: chỉ lock khi thực sự có thread đang đợi, tránh lock cho mọi packet.
  */
 class ResponseWaiter {
 public:
     /**
-     * @brief 初始化ResponseWaiter（在InitializeHooks中调用）
+     * @brief Initialize ResponseWaiter (called in InitializeHooks)
+     * @brief (VI) Khởi tạo ResponseWaiter (được gọi trong InitializeHooks)
      */
     static void Initialize();
 
     /**
-     * @brief 清理ResponseWaiter（在UninitializeHooks中调用）
+     * @brief Cleanup ResponseWaiter (called in UninitializeHooks)
+     * @brief (VI) Dọn dẹp ResponseWaiter (được gọi trong UninitializeHooks)
      */
     static void Cleanup();
 
     /**
-     * @brief 等待特定Opcode的响应
-     * @param expectedOpcode 期望的Opcode
-     * @param timeoutMs 超时时间（毫秒）
-     * @return 是否收到响应
+     * @brief Wait for a response with a specific opcode
+     * @brief (VI) Chờ phản hồi theo opcode cụ thể
+     * @param expectedOpcode Expected opcode
+     * @param timeoutMs Timeout in milliseconds
+     * @return Whether a response was received
      */
     static bool WaitForResponse(
         uint32_t expectedOpcode,
@@ -41,15 +49,21 @@ public:
     );
 
     /**
-     * @brief 通知收到响应（在ProcessReceivedGamePackets中调用）
-     * @param opcode 收到的Opcode
+     * @brief Notify that a response was received (called in ProcessReceivedGamePackets)
+     * @brief (VI) Thông báo đã nhận phản hồi (được gọi trong ProcessReceivedGamePackets)
+     * @param opcode Received opcode
      *
-     * 优化：使用原子变量快速检查是否有等待线程，避免不必要的加锁
+     * Optimization: uses an atomic fast-path to check whether any thread is waiting,
+     * avoiding unnecessary locking.
+     *
+     * (VI) Tối ưu: dùng biến atomic để kiểm tra nhanh có thread đang đợi hay không,
+     * tránh lock không cần thiết.
      */
     static void NotifyResponse(uint32_t opcode);
 
     /**
-     * @brief 取消等待
+     * @brief Cancel waiting
+     * @brief (VI) Hủy chờ
      */
     static void CancelWait();
 
@@ -58,81 +72,93 @@ private:
     static CONDITION_VARIABLE s_cv;
     static bool s_responseReceived;
     static uint32_t s_receivedOpcode;
-    static std::atomic<long> s_waitingCount;  // 等待线程计数（真正的原子操作）
+    static std::atomic<long> s_waitingCount;  // Waiting-thread counter (truly atomic)
+                                              // (VI) Bộ đếm thread đang đợi (atomic thật sự)
 };
 
 // ============================================================================
-// 响应分发器
+// Response dispatcher
+// (VI) Bộ phân phối phản hồi
 // ============================================================================
 
 /**
- * @brief 响应处理器类型定义
+ * @brief Response handler type definitions
+ * @brief (VI) Định nghĩa kiểu hàm xử lý phản hồi
  */
 using ResponseHandler = void (*)(const GamePacket&);
 using PacketProgressCallback = void (*)(DWORD, DWORD, const std::string&);
 
 /**
  * @class ResponseDispatcher
- * @brief 响应分发器 - 基于Opcode和Params分发响应到对应处理器
+ * @brief Response dispatcher - routes responses to handlers by opcode and params
+ * @brief (VI) Bộ phân phối phản hồi - điều phối theo opcode và params
  * 
- * 使用示例：
+ * Example usage:
+ * (VI) Ví dụ sử dụng:
  * @code
- * // 注册处理器
+ * // Register handler
  * ResponseDispatcher::Instance().Register(
  *     Opcode::ACTIVITY_QUERY_BACK, 
  *     788, 
  *     ProcessStrawberryResponse
  * );
  * 
- * // 在HookedRecv中分发
+ * // Dispatch inside HookedRecv
  * ResponseDispatcher::Instance().Dispatch(packet);
  * @endcode
  */
 class ResponseDispatcher {
 public:
     /**
-     * @brief 获取单例实例
+     * @brief Get the singleton instance
+     * @brief (VI) Lấy instance singleton
      */
     static ResponseDispatcher& Instance();
 
     /**
-     * @brief 注册响应处理器（仅匹配Opcode）
-     * @param opcode 操作码
-     * @param handler 处理器函数
-     * @return 注册是否成功
+     * @brief Register a response handler (opcode-only match)
+     * @brief (VI) Đăng ký handler (chỉ match opcode)
+     * @param opcode Opcode
+     * @param handler Handler function
+     * @return Whether registration succeeded
      */
     BOOL Register(uint32_t opcode, ResponseHandler handler);
 
     /**
-     * @brief 注册响应处理器（匹配Opcode + Params）
-     * @param opcode 操作码
-     * @param params 参数值
-     * @param handler 处理器函数
-     * @return 注册是否成功
+     * @brief Register a response handler (opcode + params match)
+     * @brief (VI) Đăng ký handler (match opcode + params)
+     * @param opcode Opcode
+     * @param params Params value
+     * @param handler Handler function
+     * @return Whether registration succeeded
      */
     BOOL Register(uint32_t opcode, uint32_t params, ResponseHandler handler);
 
     /**
-     * @brief 注销处理器
-     * @param opcode 操作码
-     * @param params 参数值（0xFFFFFFFF表示匹配任意params）
+     * @brief Unregister a handler
+     * @brief (VI) Hủy đăng ký handler
+     * @param opcode Opcode
+     * @param params Params value (0xFFFFFFFF matches any params)
      */
     void Unregister(uint32_t opcode, uint32_t params = 0xFFFFFFFF);
 
     /**
-     * @brief 分发封包到对应处理器
-     * @param packet 游戏封包
-     * @return 是否有处理器处理了该封包
+     * @brief Dispatch a packet to the matching handler
+     * @brief (VI) Điều phối packet tới handler phù hợp
+     * @param packet Game packet
+     * @return Whether any handler processed the packet
      */
     BOOL Dispatch(const GamePacket& packet);
 
     /**
-     * @brief 清空所有处理器
+     * @brief Clear all handlers
+     * @brief (VI) Xóa toàn bộ handler
      */
     void Clear();
 
     /**
-     * @brief 初始化默认处理器（在InitializeHooks中调用）
+     * @brief Initialize default handlers (called in InitializeHooks)
+     * @brief (VI) Khởi tạo handler mặc định (được gọi trong InitializeHooks)
      */
     void InitializeDefaultHandlers();
 
@@ -142,32 +168,38 @@ private:
     ResponseDispatcher(const ResponseDispatcher&) = delete;
     ResponseDispatcher& operator=(const ResponseDispatcher&) = delete;
 
-    // 生成唯一key: 高32位是opcode，低32位是params
+    // Build a unique key: high 32 bits = opcode, low 32 bits = params
+    // (VI) Tạo key duy nhất: 32-bit cao = opcode, 32-bit thấp = params
     static uint64_t MakeKey(uint32_t opcode, uint32_t params);
 
-    // 处理器映射表
+    // Handler map
+    // (VI) Bảng ánh xạ handler
     struct HandlerEntry {
         uint64_t key;
         ResponseHandler handler;
     };
     std::vector<HandlerEntry> m_handlers;
     
-    // 仅匹配opcode的处理器（params = 0xFFFFFFFF）
+    // Opcode-only handlers (params = 0xFFFFFFFF)
+    // (VI) Handler chỉ theo opcode (params = 0xFFFFFFFF)
     struct OpcodeHandlerEntry {
         uint32_t opcode;
         ResponseHandler handler;
     };
     std::vector<OpcodeHandlerEntry> m_opcodeOnlyHandlers;
     
-    // 线程安全
+    // Thread safety
+    // (VI) An toàn luồng
     std::mutex m_mutex;
 };
 
 // ============================================================================
-// 活动状态管理
+// Activity state management
+// (VI) Quản lý trạng thái hoạt động
 // ============================================================================
 
 /**
  * @struct ActivityState
- * @brief 活动状态基类 - 包含所有活动共有的状态字段
+ * @brief Activity state base - common fields shared by all activities
+ * @brief (VI) Base trạng thái hoạt động - các field chung cho mọi activity
  */

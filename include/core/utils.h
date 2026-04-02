@@ -1,8 +1,10 @@
 /**
  * @file utils.h
- * @brief 工具函数和通用组件
+ * @brief Utility functions and common components
+ * @brief (VI) Hàm tiện ích và các thành phần dùng chung
  * 
- * 提供编码转换、线程同步等通用功能
+ * Provides common functionality such as encoding conversion and thread synchronization.
+ * (VI) Cung cấp chức năng dùng chung như chuyển đổi encoding và đồng bộ luồng.
  */
 
 #pragma once
@@ -13,54 +15,67 @@
 #include <cstdint>
 
 // ============================================================================
-// 编码转换函数
+// Encoding conversion
+// (VI) Chuyển đổi encoding
 // ============================================================================
 
 /**
- * @brief 将UTF-8字符串转换为宽字符字符串
- * @param utf8 UTF-8编码的字符串
- * @return 宽字符字符串
+ * @brief Convert a UTF-8 string to a wide string
+ * @brief (VI) Chuyển chuỗi UTF-8 sang chuỗi wide
+ * @param utf8 UTF-8 encoded string
+ * @return Wide string
  */
 std::wstring Utf8ToWide(const std::string& utf8);
 
 /**
- * @brief 将宽字符字符串转换为UTF-8字符串
- * @param wide 宽字符字符串
- * @return UTF-8编码的字符串
+ * @brief Convert a wide string to a UTF-8 string
+ * @brief (VI) Chuyển chuỗi wide sang chuỗi UTF-8
+ * @param wide Wide string
+ * @return UTF-8 encoded string
  */
 std::string WideToUtf8(const std::wstring& wide);
 
 /**
- * @brief 将指定编码的字节序列转换为宽字符字符串
- * @param bytes 字节序列
- * @param codepage 代码页（如 936 表示 GBK）
- * @return 宽字符字符串
+ * @brief Convert bytes in a given code page to a wide string
+ * @brief (VI) Chuyển bytes theo code page sang chuỗi wide
+ * @param bytes Byte sequence
+ * @param codepage Code page (e.g. 936 for GBK)
+ * @return Wide string
  */
 std::wstring MultiToWide(const std::string& bytes, unsigned int codepage);
 
 // ============================================================================
-// RAII 临界区锁
+// RAII critical section lock
+// (VI) Khóa critical section theo RAII
 // ============================================================================
 
 /**
  * @class CriticalSectionGuard
- * @brief RAII风格的临界区自动锁
+ * @brief RAII-style critical section auto-lock
+ * @brief (VI) Tự động lock/unlock critical section theo RAII
  * 
- * 构造时自动进入临界区，析构时自动离开临界区
- * 确保异常安全，避免死锁
+ * Enters the critical section on construction and leaves on destruction.
+ * Ensures exception safety and helps avoid deadlocks.
+ *
+ * (VI) Vào critical section khi khởi tạo và thoát khi hủy.
+ * (VI) Đảm bảo an toàn khi có lỗi và giúp tránh deadlock.
  * 
  * @example
  * @code
  * CriticalSectionLock lock(cs);
- * // 临界区代码...
- * // 离开作用域时自动解锁
+ * // Critical section code...
+ * // Auto-unlocks when leaving scope
+ *
+ * // (VI) Code trong critical section...
+ * // (VI) Tự unlock khi ra khỏi scope
  * @endcode
  */
 class CriticalSectionLock {
 public:
     /**
-     * @brief 构造函数，自动进入临界区
-     * @param cs 临界区对象的引用
+     * @brief Constructor; automatically enters the critical section
+     * @brief (VI) Hàm tạo; tự động vào critical section
+     * @param cs Reference to the critical section object
      */
     explicit CriticalSectionLock(CRITICAL_SECTION& cs) 
         : m_cs(cs) 
@@ -69,7 +84,8 @@ public:
     }
 
     /**
-     * @brief 析构函数，自动离开临界区
+     * @brief Destructor; automatically leaves the critical section
+     * @brief (VI) Hàm hủy; tự động rời critical section
      */
     ~CriticalSectionLock() {
         if (m_locked) {
@@ -77,12 +93,14 @@ public:
         }
     }
 
-    // 禁止拷贝
+    // Disable copying
+    // (VI) Cấm copy
     CriticalSectionLock(const CriticalSectionLock&) = delete;
     CriticalSectionLock& operator=(const CriticalSectionLock&) = delete;
 
     /**
-     * @brief 手动提前解锁
+     * @brief Manually unlock early
+     * @brief (VI) Unlock thủ công trước thời điểm hủy
      */
     void Unlock() {
         if (m_locked) {
@@ -92,7 +110,8 @@ public:
     }
 
     /**
-     * @brief 手动重新加锁
+     * @brief Manually re-lock
+     * @brief (VI) Lock lại thủ công
      */
     void Lock() {
         if (!m_locked) {
@@ -102,20 +121,27 @@ public:
     }
 
 private:
-    CRITICAL_SECTION& m_cs;  ///< 临界区引用
-    bool m_locked;           ///< 是否已锁定
+    CRITICAL_SECTION& m_cs;  ///< Critical section reference
+                             ///< (VI) Tham chiếu critical section
+    bool m_locked;           ///< Whether currently locked
+                             ///< (VI) Trạng thái đang lock hay không
 };
 
 // ============================================================================
-// RAII 临界区生命周期管理
+// RAII critical section lifetime management
+// (VI) Quản lý vòng đời critical section theo RAII
 // ============================================================================
 
 /**
  * @class CriticalSectionScope
- * @brief 临界区的生命周期管理类
+ * @brief Critical section lifetime management class
+ * @brief (VI) Lớp quản lý vòng đời critical section
  * 
- * 构造时初始化临界区，析构时删除临界区
- * 配合 CriticalSectionLock 使用
+ * Initializes the critical section on construction and deletes it on destruction.
+ * Used together with CriticalSectionLock.
+ *
+ * (VI) Khởi tạo critical section khi tạo object và hủy khi object bị hủy.
+ * (VI) Dùng kèm với CriticalSectionLock.
  */
 class CriticalSectionScope {
 public:
@@ -127,16 +153,19 @@ public:
         DeleteCriticalSection(&m_cs);
     }
 
-    // 禁止拷贝
+    // Disable copying
+    // (VI) Cấm copy
     CriticalSectionScope(const CriticalSectionScope&) = delete;
     CriticalSectionScope& operator=(const CriticalSectionScope&) = delete;
 
     /**
-     * @brief 获取临界区引用
-     * @return 临界区的引用
+     * @brief Get the critical section reference
+     * @brief (VI) Lấy tham chiếu critical section
+     * @return Reference to the critical section
      */
     CRITICAL_SECTION& Get() { return m_cs; }
 
 private:
-    CRITICAL_SECTION m_cs;  ///< 临界区对象
+    CRITICAL_SECTION m_cs;  ///< Critical section object
+                            ///< (VI) Đối tượng critical section
 };

@@ -1,216 +1,315 @@
-# 卡布西游浮影微端
+# KBXYFYWD - WebView2 Windows helper
+*(VI) KBXYFYWD - Công cụ hỗ trợ Windows dùng WebView2*
 
 [![Version](https://img.shields.io/badge/version-1.04-blue.svg)](https://github.com/lllcc666/kbxyfywd)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)](https://github.com/lllcc666/kbxyfywd)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-基于 WebView2 的 Windows 游戏辅助桌面程序，使用 Win32 C++17、ATL/WebBrowser、MinHook 和嵌入式资源实现。
+A WebView2-based Windows desktop helper for the game, built with Win32 C++17, ATL/WebBrowser, MinHook, and embedded resources.
 
-## 项目特点
+*(VI) Ứng dụng desktop Windows hỗ trợ game dựa trên WebView2, dùng Win32 C++17, ATL/WebBrowser, MinHook và tài nguyên nhúng.*
 
-- 使用 WebView2 承载工具界面，前端资源来自 `resources/ui.html`
-- 使用 ATL `CAxWindow` + `IWebBrowser2` 承载游戏页面
-- 提供网络封包拦截、协议解析、活动自动化、数据桥接等能力
-- 构建时将 HTML、WebView2Loader、zlib 等资源嵌入到可执行文件中
-- 以 Windows x64 + MSVC + CMake 为主要开发环境
+## Features
+*(VI) Tính năng*
 
-## 技术栈
+- Hosts the tool UI using WebView2 (frontend source: `resources/ui.html`)
+- Hosts the game page using ATL `CAxWindow` + `IWebBrowser2`
+- Provides packet interception, protocol parsing, activity automation, and data bridging
+- Embeds HTML/WebView2Loader/zlib resources into the executable at build time
+- Primary dev environment: Windows x64 + MSVC + CMake
 
-| 组件 | 说明 |
+*(VI)*
+- *(VI) Dùng WebView2 để hiển thị UI công cụ (nguồn frontend: `resources/ui.html`)*
+- *(VI) Dùng ATL `CAxWindow` + `IWebBrowser2` để nhúng trang game*
+- *(VI) Có chặn packet mạng, parse protocol, tự động hóa activity, cầu nối dữ liệu*
+- *(VI) Nhúng tài nguyên HTML/WebView2Loader/zlib vào file `.exe` khi build*
+- *(VI) Môi trường phát triển chính: Windows x64 + MSVC + CMake*
+
+## Tech stack
+*(VI) Công nghệ sử dụng*
+
+| Component | Notes |
 |------|------|
-| 语言 | C++17 |
-| 桌面框架 | Win32 API |
+| Language | C++17 |
+| Desktop framework | Win32 API |
 | UI | WebView2 + HTML/CSS/JavaScript |
-| 游戏承载 | ATL / WebBrowser |
+| Game host | ATL / WebBrowser |
 | Hook | MinHook |
-| 压缩/加载 | zlib / MemoryModule |
-| 构建 | CMake 3.16+ |
-| 依赖管理 | vcpkg |
+| Compression/loader | zlib / MemoryModule |
+| Build | CMake 3.16+ |
+| Dependency management | vcpkg |
 
-## 环境要求
+*(VI) Bảng trên: Component = Thành phần, Notes = Mô tả.*
+
+## Requirements
+*(VI) Yêu cầu môi trường*
 
 - Windows 10/11 x64
-- Visual Studio 2019 或 2022
-- CMake 3.16 及以上
-- Python 3，且可通过 `python3` 命令调用
+- Visual Studio 2019 or 2022
+- CMake 3.16+
+- Python 3 available via `python3`
 - vcpkg
 
-## 构建方式
+*(VI)*
+- *(VI) Windows 10/11 x64*
+- *(VI) Visual Studio 2019 hoặc 2022*
+- *(VI) CMake 3.16+*
+- *(VI) Python 3 gọi được bằng lệnh `python3`*
+- *(VI) vcpkg*
 
-仓库根目录下的 `CMakeLists.txt` 当前硬编码了：
+## Build
+*(VI) Cách build*
+
+`CMakeLists.txt` currently hardcodes this vcpkg path:
+
+*(VI) `CMakeLists.txt` hiện đang hardcode đường dẫn vcpkg như sau:*
 
 ```text
 d:/AItrace/CE/.trae/vcpkg-master
 ```
 
-如果你的本地环境路径不同，需要先调整该路径或修改 CMake 配置。
+If your local path differs, update it first or adjust the CMake config.
 
-### 生成工程
+*(VI) Nếu máy bạn khác đường dẫn này, hãy sửa lại trước hoặc chỉnh cấu hình CMake.*
+
+### Generate project
+*(VI) Tạo project*
 
 ```powershell
 cmake -S . -B build_new -G "Visual Studio 17 2022" -A x64
 ```
 
-### 编译 Release
+### Build Release
+*(VI) Build bản Release*
 
 ```powershell
 cmake --build build_new --config Release
 ```
 
-### 运行程序
+### Run
+*(VI) Chạy chương trình*
 
 ```powershell
 .\build_new\bin\Release\WebView2Demo.exe
 ```
 
-## 目录结构
+## Repository layout
+*(VI) Cấu trúc thư mục*
 
 ```text
 kbwebui/
 ├─ src/
-│  ├─ app/                  # 程序入口与主窗口初始化
-│  ├─ core/                 # 桥接、工具函数、消息处理、数据拦截
-│  ├─ hook/                 # Hook 主逻辑与自动化实现
-│  └─ protocol/             # 协议解析与封包构建实现
+│  ├─ app/                  # App entry & main window bootstrap
+│  ├─ core/                 # Bridge/utils/message handling/data interception
+│  ├─ hook/                 # Hook core logic & automation
+│  └─ protocol/             # Protocol parsing & packet building
 ├─ include/
-│  ├─ activities/           # 各活动/功能模块声明
-│  ├─ core/                 # core 层头文件
-│  ├─ hook/                 # hook 层公开头文件
-│  ├─ internal/             # 内部状态机、等待器、私有结构
-│  └─ protocol/             # 协议相关类型与声明
-├─ resources/               # UI、图标、RC 资源
-├─ embedded/                # 嵌入式头文件与嵌入资源
-├─ data/                    # 本地 XML 数据缓存
-├─ scripts/                 # Python 脚本工具
-├─ swf_cache/               # 下载缓存，不作为源码
-├─ build_new/               # 本地构建输出目录
+│  ├─ activities/           # Activity/feature declarations
+│  ├─ core/                 # Core headers
+│  ├─ hook/                 # Hook public headers
+│  ├─ internal/             # Internal state machines/waiters/private structs
+│  └─ protocol/             # Protocol types & declarations
+├─ resources/               # UI/icon/RC resources
+├─ embedded/                # Embedded headers & embedded assets
+├─ data/                    # Local XML data cache
+├─ scripts/                 # Python tooling scripts
+├─ swf_cache/               # Download cache (not source)
+├─ build_new/               # Local build output directory
 ├─ CMakeLists.txt
 ├─ README.md
 └─ AGENTS.md
 ```
 
-## 核心文件说明
+*(VI) Chú thích nhanh (tương ứng với các dòng `#` ở trên).*
+
+## Key files
+*(VI) Các file quan trọng*
 
 - `src/app/demo.cpp`
-  - 程序入口、窗口生命周期、WebView2 初始化、全局 UI 流程
+  - App entry, window lifecycle, WebView2 init, main UI flow
 - `src/hook/wpe_hook.cpp`
-  - Hook 生命周期、数据包拦截、响应分发、自动化主逻辑
+  - Hook lifecycle, packet interception, response dispatch, automation core
 - `src/hook/wpe_hook_helpers.cpp`
-  - Hook 层辅助实现
+  - Hook helpers
 - `src/protocol/packet_parser.cpp`
-  - 协议解析、Opcode/Params 相关处理、解压逻辑
+  - Protocol parsing, opcode/params handling, decompression
 - `src/protocol/packet_builder.cpp`
-  - 封包构造辅助
+  - Packet building helpers
 - `src/core/ui_bridge.cpp`
-  - C++ 到前端 JavaScript 的桥接
+  - C++ to JavaScript bridge
 - `src/core/web_message_handler.cpp`
-  - 前端消息到原生逻辑的入口
+  - Frontend-to-native message entry point
 - `src/core/data_interceptor.cpp`
-  - HTTP/资源响应拦截与修改
+  - HTTP/asset response interception and modification
 - `include/activities/*.h`
-  - 活动声明、状态访问接口、自动化入口函数
+  - Activity declarations, state access, automation entry points
 - `include/internal/*.h`
-  - 内部状态结构、等待器、状态机
+  - Internal state, waiters, state machines
 
-## 资源与生成文件
+*(VI) Mô tả tiếng Việt cho list trên tương ứng 1-1 với ý nghĩa tiếng Anh.*
 
-### 源资源
+## Assets and generated files
+*(VI) Tài nguyên và file sinh ra khi build*
+
+### Source assets
+*(VI) Tài nguyên nguồn*
 
 - `resources/ui.html`
 - `resources/app.rc`
 - `resources/app.ico`
 
-### 构建生成
+### Generated during build
+*(VI) Sinh ra trong quá trình build*
 
-以下文件由构建过程生成，不建议手工编辑：
+These files are generated by the build and should not be edited manually:
+
+*(VI) Các file dưới đây được sinh ra khi build, không nên sửa tay:*
 
 - `embedded/ui_html.h`
 - `embedded/webview2loader_data.h`
 - `embedded/zlib_data.h`
 
-### 仓库内维护的嵌入头文件
+### Embedded headers tracked in repo
+*(VI) Header nhúng được commit trong repo*
 
-以下文件位于 `embedded/`，但不是当前 CMake 自定义命令生成的：
+These files are under `embedded/` but are not generated by the current CMake custom commands:
+
+*(VI) Các file dưới nằm trong `embedded/` nhưng không phải do CMake hiện tại tự sinh:*
 
 - `embedded/minhook_data.h`
 - `embedded/speed_x64_data.h`
 - `embedded/minizip_helper.h`
 
-## Python 脚本
+## Python scripts
+*(VI) Script Python*
 
 - `scripts/embed_html.py`
-  - 将 `resources/ui.html` 转成嵌入头文件
+  - Converts `resources/ui.html` into an embedded header
 - `scripts/embed_dll.py`
-  - 将 DLL 转成嵌入头文件
+  - Converts a DLL into an embedded header
 - `scripts/download_swf.py`
-  - 下载活动 SWF 到本地缓存目录
+  - Downloads activity SWFs into the local cache directory
 - `scripts/fetch_activities.py`
-  - 获取活动数据/缓存辅助脚本
+  - Fetches activity data / cache helper
 
-## 协议说明
+*(VI) Mô tả tiếng Việt tương ứng với các bullet tiếng Anh ở trên.*
 
-当前项目中的基础封包格式为：
+## Protocol notes
+*(VI) Ghi chú về protocol*
+
+Base packet layout used in this project:
+
+*(VI) Định dạng packet cơ bản trong project:*
 
 ```text
 Magic(2) + Length(2) + Opcode(4) + Params(4) + Body
 ```
 
-- 普通包 Magic: `0x5344`
-- 压缩包 Magic: `0x5343`
-- 协议数值按小端处理
+- Normal packet magic: `0x5344`
+- Compressed packet magic: `0x5343`
+- Protocol numbers are little-endian
 
-## 开发建议
+*(VI)*
+- *(VI) Magic của packet thường: `0x5344`*
+- *(VI) Magic của packet nén: `0x5343`*
+- *(VI) Giá trị protocol dùng little-endian*
 
-### 添加新活动功能
+## Development tips
+*(VI) Gợi ý phát triển*
 
-通常按下面顺序扩展：
+### Adding a new activity/feature
+*(VI) Thêm activity/tính năng mới*
 
-1. 在协议层补充所需常量、Opcode、数据结构
-2. 在 `include/activities/` 中增加活动声明
-3. 在 `include/internal/` 中补充内部状态结构（如果需要）
-4. 在 `src/hook/wpe_hook.cpp` 中实现发送、响应处理和自动化流程
-5. 在 `src/core/web_message_handler.cpp` 或 `src/app/demo.cpp` 中接入 UI 入口
+Typical steps:
 
-### 修改前端
+*(VI) Thường làm theo thứ tự:*
 
-- 优先修改 `resources/ui.html`
-- 通过重新构建生成新的 `embedded/ui_html.h`
-- 不要直接手改 `embedded/ui_html.h`
+1. Add required constants/opcodes/data structures in the protocol layer
+2. Add activity declarations in `include/activities/`
+3. Add internal state structures in `include/internal/` (if needed)
+4. Implement sending/response handling/automation flow in `src/hook/wpe_hook.cpp`
+5. Wire the UI entry in `src/core/web_message_handler.cpp` or `src/app/demo.cpp`
 
-### 修改构建配置
+*(VI)*
+1. *(VI) Bổ sung hằng số/opcode/struct ở layer protocol*
+2. *(VI) Thêm khai báo activity ở `include/activities/`*
+3. *(VI) Thêm struct trạng thái nội bộ ở `include/internal/` (nếu cần)*
+4. *(VI) Implement gửi/xử lý phản hồi/tự động hóa trong `src/hook/wpe_hook.cpp`*
+5. *(VI) Nối UI entry trong `src/core/web_message_handler.cpp` hoặc `src/app/demo.cpp`*
 
-- 入口文件与实现文件现在统一从 `src/` 目录编译
-- 公共头文件按 `include/` 子目录分类
-- 如果新增源文件，需要同步更新 `CMakeLists.txt`
+### Updating the frontend
+*(VI) Sửa frontend*
 
-## 验证方式
+- Prefer editing `resources/ui.html`
+- Rebuild to regenerate `embedded/ui_html.h`
+- Do not edit `embedded/ui_html.h` directly
 
-当前仓库没有配置自动化测试框架，常用验证方式为：
+*(VI)*
+- *(VI) Ưu tiên sửa `resources/ui.html`*
+- *(VI) Build lại để sinh `embedded/ui_html.h` mới*
+- *(VI) Không sửa trực tiếp `embedded/ui_html.h`*
 
-- 重新编译：`cmake --build build_new --config Release`
-- 启动程序：`.\build_new\bin\Release\WebView2Demo.exe`
-- 检查 UI 是否正常加载
-- 检查相关活动功能、Hook 流程和响应处理是否仍然正常
+### Updating build configuration
+*(VI) Sửa cấu hình build*
 
-## 常见问题
+- Entrypoints and implementation sources are compiled from `src/`
+- Public headers are organized under `include/` subfolders
+- When adding new source files, also update `CMakeLists.txt`
 
-### 构建时找不到 vcpkg 依赖
+*(VI)*
+- *(VI) Source entry/implementation build từ thư mục `src/`*
+- *(VI) Header public được phân loại theo `include/`*
+- *(VI) Nếu thêm file source mới, nhớ cập nhật `CMakeLists.txt`*
 
-检查 `CMakeLists.txt` 中的 `VCPKG_ROOT` 是否与你的本地路径一致。
+## Validation
+*(VI) Cách kiểm tra/verify*
 
-### 修改了前端但程序里没有生效
+This repo currently has no automated test framework; common validation is:
 
-确认是否重新执行了构建，让 `resources/ui.html` 重新生成到 `embedded/ui_html.h`。
+*(VI) Repo hiện chưa có test tự động; cách verify thường dùng:*
 
-### 新增了源码文件但编译没有包含
+- Rebuild: `cmake --build build_new --config Release`
+- Run: `.\build_new\bin\Release\WebView2Demo.exe`
+- Verify the UI loads correctly
+- Verify affected activity features, hook flow, and response handling
 
-确认文件已经放到正确目录，并已同步加入 `CMakeLists.txt`。
+*(VI)*
+- *(VI) Build lại: `cmake --build build_new --config Release`*
+- *(VI) Chạy: `.\build_new\bin\Release\WebView2Demo.exe`*
+- *(VI) Kiểm tra UI load bình thường*
+- *(VI) Kiểm tra activity/hook/response handling còn hoạt động đúng*
 
-## 许可证
+## FAQ
+*(VI) Câu hỏi thường gặp*
+
+### Build can't find vcpkg dependencies
+*(VI) Build không tìm thấy dependency vcpkg*
+
+Check whether `VCPKG_ROOT` in `CMakeLists.txt` matches your local path.
+
+*(VI) Kiểm tra `VCPKG_ROOT` trong `CMakeLists.txt` có đúng đường dẫn máy bạn không.*
+
+### Frontend changes not taking effect
+*(VI) Sửa frontend nhưng không thấy hiệu lực*
+
+Make sure you rebuilt so `resources/ui.html` gets regenerated into `embedded/ui_html.h`.
+
+*(VI) Hãy chắc chắn bạn đã build lại để `resources/ui.html` được sinh lại vào `embedded/ui_html.h`.*
+
+### New source file not compiled
+*(VI) Thêm file source mới nhưng build không include*
+
+Confirm the file is in the right directory and has been added to `CMakeLists.txt`.
+
+*(VI) Xác nhận file đặt đúng thư mục và đã thêm vào `CMakeLists.txt`.*
+
+## License
+*(VI) Giấy phép*
 
 MIT License
 
-## 相关链接
+## Links
+*(VI) Liên kết*
 
-- GitHub 仓库：https://github.com/lllcc666/kbxyfywd
-- 问题反馈：https://github.com/lllcc666/kbxyfywd/issues
+- GitHub repo: `https://github.com/lllcc666/kbxyfywd`
+- Issues: `https://github.com/lllcc666/kbxyfywd/issues`
