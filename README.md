@@ -93,6 +93,19 @@ cmake --build build_new --config Release
 .\build_new\bin\Release\WebView2Demo.exe
 ```
 
+### Run on macOS (stub mode)
+*(VI) Chạy trên macOS (chế độ stub)*
+
+This repository is still Windows-first. On macOS, you can run a temporary stub launcher that opens `resources/ui.html` in your default browser.
+
+*(VI) Repo hiện vẫn ưu tiên Windows. Trên macOS, bạn có thể chạy launcher tạm thời để mở `resources/ui.html` bằng trình duyệt mặc định.*
+
+```bash
+cmake -S . -B build_new
+cmake --build build_new
+cmake --build build_new --target kbxyfywd_macos_stub
+```
+
 ## Repository layout
 *(VI) Cấu trúc thư mục*
 
