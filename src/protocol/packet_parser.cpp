@@ -880,7 +880,7 @@ bool PacketParser::ParsePackets(const uint8_t* data, size_t size, BOOL bSend, st
 void PacketParser::SendToUI(const std::wstring& type, const std::wstring& data) {
     // 如果 g_hWnd 为空，尝试查找窗口
     if (!g_hWnd) {
-        g_hWnd = FindWindowW(L"WebView2DemoWindowClass", L"卡布西游浮影微端 V1.02");
+        g_hWnd = FindWindowW(L"WebView2DemoWindowClass", L"卡布西游浮影微端 V1.07");
         if (!g_hWnd) {
             g_hWnd = FindWindowW(L"WebView2DemoWindowClass", nullptr);
         }
@@ -902,7 +902,7 @@ void PacketParser::SendBossListToUI() {
     
     // 如果 g_hWnd 为空，尝试查找窗口
     if (!g_hWnd) {
-        g_hWnd = FindWindowW(L"WebView2DemoWindowClass", L"卡布西游浮影微端 V1.02");
+        g_hWnd = FindWindowW(L"WebView2DemoWindowClass", L"卡布西游浮影微端 V1.07");
         if (!g_hWnd) {
             g_hWnd = FindWindowW(L"WebView2DemoWindowClass", nullptr);
         }

@@ -1257,7 +1257,7 @@
     <div class="title-bar">
         <div class="title-bar-left">
             <div class="title-bar-icon">卡</div>
-            <span class="title-bar-title">Ứng dụng hỗ trợ game Kabuxiyou - V1.05</span>
+            <span class="title-bar-title">Ứng dụng hỗ trợ game Kabuxiyou - V1.07</span>
         </div>
         <div class="title-bar-controls">
             <button class="title-bar-button" id="btn-minimize" title="最小化">
@@ -1886,15 +1886,26 @@
                         <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 6px;">Hoạt động mới nhất</div>
                         <!-- 活动卡片网格布局 -->
                         <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-                            <!-- 采摘红莓果模块 (Act788) -->
-                            <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
+                            <!-- 清明赏河景模块 (Act803) -->
+                            <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 160px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Thu thập trái dâu đỏ</div>
-                                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
-                                        <input type="checkbox" id="strawberry-sweep" style="width: 10px; height: 10px; cursor: pointer;">
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Ngắm cảnh sông</div>
+                                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9.5px; color: #666;">
+                                        <input type="checkbox" id="act803-sweep" style="width: 11px; height: 11px; cursor: pointer;">
                                         <span>Làm tất cả</span>
                                     </label>
-                                    <button id="one-key-strawberry" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
+                                    <button id="one-key-act803" class="btn btn-primary" style="font-size: 9.5px; padding: 3px 8px;">一键完成</button>
+                                </div>
+                            </div>
+
+                            <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 160px; flex-shrink: 0;">
+                                <div style="display: flex; flex-direction: column; gap: 4px;">
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">采蘑菇的好伙伴</div>
+                                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
+                                        <input type="checkbox" id="act624-sweep" style="width: 10px; height: 10px; cursor: pointer;">
+                                        <span>Làm tất cả</span>
+                                    </label>
+                                    <button id="one-key-act624" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
                                 </div>
                             </div>
                             <!-- 摘取大力果实模块 (Act782) -->
@@ -3196,13 +3207,25 @@
             }
         };
 
-        // 采摘红莓果 - 一键完成
-        window.oneKeyStrawberry = function() {
-            var sweepCheckbox = document.getElementById('strawberry-sweep');
+        // 清明赏河景 - 一键完成
+        window.oneKeyAct803 = function() {
+            var sweepCheckbox = document.getElementById('act803-sweep');
             var useSweep = sweepCheckbox ? sweepCheckbox.checked : false;
             if (window.chrome && window.chrome.webview) {
-                window.chrome.webview.postMessage(JSON.stringify({ 
-                    action: 'one_key_strawberry',
+                window.chrome.webview.postMessage(JSON.stringify({
+                    action: 'one_key_act803',
+                    sweep: useSweep
+                }));
+            }
+        };
+
+        // 采蘑菇的好伙伴 - 一键完成
+        window.oneKeyAct624 = function() {
+            var sweepCheckbox = document.getElementById('act624-sweep');
+            var useSweep = sweepCheckbox ? sweepCheckbox.checked : false;
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(JSON.stringify({
+                    action: 'one_key_act624',
                     sweep: useSweep
                 }));
             }
@@ -3630,6 +3653,14 @@
             var act791Btn = document.getElementById('one-key-act791');
             if (act791Btn) {
                 act791Btn.addEventListener('click', window.oneKeyAct791);
+            }
+            var act803Btn = document.getElementById('one-key-act803');
+            if (act803Btn) {
+                act803Btn.addEventListener('click', window.oneKeyAct803);
+            }
+            var act624Btn = document.getElementById('one-key-act624');
+            if (act624Btn) {
+                act624Btn.addEventListener('click', window.oneKeyAct624);
             }
             var act782Btn = document.getElementById('one-key-act782');
             if (act782Btn) {

@@ -432,13 +432,6 @@ public:
         } else if (msg.find(L"stop_shuangtai") != std::wstring::npos) {
             StopShuangTai();
             SetHelperText(L"双台谷刷级已停止");
-        } else if (msg.find(L"one_key_strawberry") != std::wstring::npos) {
-            const bool useSweep = GetJsonBoolValue(msg, L"sweep");
-            if (SendOneKeyStrawberryPacket(useSweep)) {
-                SetHelperText(useSweep ? L"采摘红莓果已开始（扫荡模式），请查看辅助日志" : L"采摘红莓果已开始，请查看辅助日志");
-            } else {
-                SetHelperText(L"采摘红莓果启动失败，可能已经在运行或未进入游戏");
-            }
         } else if (msg.find(L"battlesix_auto_match") != std::wstring::npos) {
             const std::wstring matchCountStr = GetTrimmedJsonValue(msg, L"matchCount");
             int matchCount = 1;
@@ -454,6 +447,20 @@ public:
                 return 0;
             }, pMatchCount, 0, nullptr);
             if (hThread) CloseHandle(hThread);
+        } else if (msg.find(L"one_key_act803") != std::wstring::npos) {
+            const bool useSweep = GetJsonBoolValue(msg, L"sweep");
+            if (SendOneKeyAct803Packet(useSweep, Act803::MAX_NUM)) {
+                SetHelperText(useSweep ? L"清明赏河景已开始（扫荡模式）" : L"清明赏河景已开始（游戏模式）");
+            } else {
+                SetHelperText(L"清明赏河景启动失败");
+            }
+        } else if (msg.find(L"one_key_act624") != std::wstring::npos) {
+            const bool useSweep = GetJsonBoolValue(msg, L"sweep");
+            if (SendOneKeyAct624Packet(useSweep)) {
+                SetHelperText(useSweep ? L"采蘑菇的好伙伴已开始（扫荡模式）" : L"采蘑菇的好伙伴已开始（三轮模式）");
+            } else {
+                SetHelperText(L"采蘑菇的好伙伴启动失败");
+            }
         } else if (msg.find(L"battlesix_cancel_match") != std::wstring::npos) {
             g_battleSixAuto.SetAutoMatching(false);
             g_battleSixAuto.SetMatchCount(0);

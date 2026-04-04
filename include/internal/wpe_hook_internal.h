@@ -99,8 +99,8 @@ using PacketProgressCallback = void (*)(DWORD, DWORD, const std::string&);
  * // Register handler
  * ResponseDispatcher::Instance().Register(
  *     Opcode::ACTIVITY_QUERY_BACK, 
- *     788, 
- *     ProcessStrawberryResponse
+ *     activityId,
+ *     ProcessActivityResponse
  * );
  * 
  * // Dispatch inside HookedRecv
