@@ -5,6 +5,10 @@ import os
 
 BASE_URL = "http://enter.wanwan4399.com/bin-debug/"
 
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+_SWF_CACHE_DIR = os.path.join(_REPO_ROOT, "swf_cache")
+
+
 def download_swf(url_path, output_name=None):
     """下载SWF文件"""
     if url_path == '0' or not url_path:
@@ -15,7 +19,8 @@ def download_swf(url_path, output_name=None):
     if not output_name:
         output_name = os.path.basename(url_path)
     
-    output_path = f'D:/AItrace/CE/.trae/kbwebui/swf_cache/{output_name}'
+    os.makedirs(_SWF_CACHE_DIR, exist_ok=True)
+    output_path = os.path.join(_SWF_CACHE_DIR, output_name)
     
     print(f'下载: {url}')
     print(f'保存: {output_path}')

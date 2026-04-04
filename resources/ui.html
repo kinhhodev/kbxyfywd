@@ -1247,6 +1247,9 @@
         .update-dialog-btn.secondary:hover {
             background: #f1f5f9;
         }
+        .icon-copy, .icon-key {
+            width: 16px;
+        }
     </style>
 </head>
 <body>
@@ -1254,7 +1257,7 @@
     <div class="title-bar">
         <div class="title-bar-left">
             <div class="title-bar-icon">卡</div>
-            <span class="title-bar-title">卡布西游浮影微端 V1.05</span>
+            <span class="title-bar-title">Ứng dụng hỗ trợ game Kabuxiyou - V1.05</span>
         </div>
         <div class="title-bar-controls">
             <button class="title-bar-button" id="btn-minimize" title="最小化">
@@ -1273,8 +1276,8 @@
     
     <!-- 辅助提示区域 - 作为body的直接子元素，完全独立 -->
     <div class="helper-info">
-        <span class="helper-label">辅助提示:</span>
-        <span class="helper-text" id="helper-text">当前暂时没有操作</span>
+        <span class="helper-label">Thông báo:</span>
+        <span class="helper-text" id="helper-text">Hiện tại không có hành động</span>
     </div>
 
     <!-- 更新对话框 -->
@@ -1372,12 +1375,12 @@
         </div>
         
         <div class="tabs">
-            <button class="tab-button active" onclick="openTab(event, 'battle')">战斗数据</button>
-            <button class="tab-button" onclick="openTab(event, 'monster')">妖怪背包</button>
-            <button class="tab-button" onclick="openTab(event, 'daily')">功能区</button>
+            <button class="tab-button active" onclick="openTab(event, 'battle')">Chiến đấu</button>
+            <button class="tab-button" onclick="openTab(event, 'monster')">Quái vật</button>
+            <button class="tab-button" onclick="openTab(event, 'daily')">Sự kiện thường nhật</button>
             <button class="tab-button" onclick="openTab(event, 'wpe')">WPE</button>
-            <button class="tab-button" onclick="openTab(event, 'settings')">设置</button>
-            <button class="tab-button" onclick="openTab(event, 'helper-log')">辅助日志</button>
+            <button class="tab-button" onclick="openTab(event, 'settings')">Cài đặt</button>
+            <button class="tab-button" onclick="openTab(event, 'helper-log')">Nhật ký</button>
 
             <!-- 右侧图标按钮 -->
             <div class="tab-actions">
@@ -1388,7 +1391,7 @@
                             <path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm2 8h4a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1zM4 4v8a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H7a2 2 0 0 1-2-2V4H4z" fill="var(--color-text-primary)"/>
                         </svg>
                     </span>
-                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">复制Key</span>
+                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">Sao chép Key</span>
                 </button>
 
                 <!-- Key登录按钮 -->
@@ -1398,7 +1401,7 @@
                             <path d="M8 1a4 4 0 0 0-4 4 4 4 0 0 0 3.5 3.97V11h-1a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-2.03A4 4 0 0 0 12 5a4 4 0 0 0-4-4zm0 1a3 3 0 0 1 3 3 3 3 0 0 1-3 3 3 3 0 0 1-3-3 3 3 0 0 1 3-3z" fill="var(--color-text-primary)"/>
                         </svg>
                     </span>
-                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">Key登录</span>
+                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">Đăng nhập bằng Key</span>
                 </button>
 
                 <!-- 刷新游戏按钮 - 双箭头刷新图标 -->
@@ -1409,7 +1412,7 @@
                             <path d="M2.5 8a5.5 5.5 0 0 1 9-4.15L10.5 5H8V2h5v5h-3V4.5A4.5 4.5 0 0 0 3.5 8h-1zm11 0a5.5 5.5 0 0 1-9 4.15L5.5 11H8v3H3v-5h3v2.5A4.5 4.5 0 0 0 12.5 8h1z" fill="var(--color-text-primary)"/>
                         </svg>
                     </span>
-                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">刷新游戏</span>
+                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">Làm mới trò chơi</span>
                 </button>
 
                 <!-- 不换号刷新按钮 - 刷新+锁定组合图标 -->
@@ -1423,7 +1426,7 @@
                             <path d="M7 7V5a1 1 0 0 1 2 0v2h-2z" fill="var(--color-primary)"/>
                         </svg>
                     </span>
-                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">不换号刷新</span>
+                    <span style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">Làm mới không đổi tài khoản</span>
                 </button>
                 
                 <!-- 游戏静音按钮 - 喇叭+斜杠静音图标 -->
@@ -1434,7 +1437,7 @@
                             <path d="M3 5v6h2l4 4V1L5 5H3zm5.5 3A3.5 3.5 0 0 1 7 8.5V7.5c0-.83.34-1.58.88-2.12l-.71-.71A4.5 4.5 0 0 0 6 7.5v1a4.5 4.5 0 0 0 2.17 3.83l.71-.71A3.5 3.5 0 0 1 8.5 8zm3.5 0a6 6 0 0 1-2.83 5.12l.71.71A7 7 0 0 0 13 8h-1zm-7-3l-1-1L1 6l9 9 3-3-1-1-2 2-5-5 2-2z" fill="var(--color-text-primary)" id="mute-icon-path"/>
                         </svg>
                     </span>
-                    <span id="mute-text" style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">游戏静音</span>
+                    <span id="mute-text" style="font-size: 9px; font-weight: 500; color: var(--color-text-primary);">Tắt âm thanh</span>
                 </button>
             </div>
         </div>
@@ -1447,7 +1450,7 @@
                     <div style="width: 320px; height: 150px; opacity: 0; transform: translateY(4px); animation: fadeInUp var(--duration-slow) var(--easing-enter) forwards; animation-delay: 0.1s; flex: none;">
                         <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; box-shadow: var(--shadow-sm); height: 100%; display: flex; flex-direction: column;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; min-height: 18px;">
-                                <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">我方数据</h3>
+                                <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Quái Phe ta</h3>
                                 <!-- 增益减益效果标签区域 - 支持横向滚动 -->
                                 <div id="my-buf-list" style="display: flex; flex-wrap: nowrap; gap: 2px; max-width: 200px; min-width: 0; overflow-x: hidden; overflow-y: hidden; padding-bottom: 4px;">
                                     <!-- Buff 标签由 JS 动态填充 -->
@@ -1461,22 +1464,22 @@
                                     <!-- 组合框 -->
                                     <div style="margin-bottom: 5px;">
                                         <select id="my-pet-select" class="input" style="width: 85px; font-size: 9.5px; padding: 4px 6px;">
-                                            <option value="0">妖怪1</option>
+                                            <option value="0">Quái vật 1</option>
                                         </select>
                                     </div>
                                     
                                     <!-- 标签 -->
                                     <div style="display: flex; flex-direction: column; gap: 3px;">
                                         <div style="display: flex; align-items: center; padding: 3px 5px; background: var(--color-background-hover); border-radius: 2px; transition: all var(--duration-fast) var(--easing-standard);">
-                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">妖怪ID:</span>
+                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">ID:</span>
                                             <span id="my-spirit-id" style="font-size: 9.5px; font-weight: 400; color: var(--color-text-primary); white-space: normal; word-wrap: break-word; word-break: break-all; flex-shrink: 0; width: 40px; text-align: center;">0</span>
                                         </div>
                                         <div style="display: flex; align-items: center; padding: 3px 5px; background: var(--color-background-hover); border-radius: 2px; transition: all var(--duration-fast) var(--easing-standard);">
-                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">血量:</span>
+                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">Máu:</span>
                                             <span id="my-hp" style="font-size: 9.5px; font-weight: 400; color: var(--color-text-primary); white-space: normal; word-wrap: break-word; word-break: break-all; flex-shrink: 0; width: 40px; text-align: center;">0/0</span>
                                         </div>
                                         <div style="display: flex; align-items: center; padding: 3px 5px; background: var(--color-background-hover); border-radius: 2px; transition: all var(--duration-fast) var(--easing-standard);">
-                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">妖怪名称:</span>
+                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">Tên:</span>
                                             <span id="my-name" style="font-size: 9.5px; font-weight: 400; color: var(--color-text-primary); white-space: normal; word-wrap: break-word; word-break: break-all; flex-shrink: 0; width: 40px; text-align: center;">未知</span>
                                         </div>
                                     </div>
@@ -1486,8 +1489,8 @@
                                 <div style="width: 190px; height: 110px; flex: none; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; background: var(--color-background); display: flex; flex-direction: column;">
                                     <!-- 列表表头 -->
                                     <div style="display: grid; grid-template-columns: 105px 75px; background: var(--color-background-hover); padding: 3px 5px; border-bottom: 1px solid var(--color-border);">
-                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">技能名称</div>
-                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">PP值</div>
+                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">Kỹ năng</div>
+                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">PP</div>
                                     </div>
                                     
                                     <!-- 列表内容 -->
@@ -1503,7 +1506,7 @@
                     <div style="width: 320px; height: 150px; opacity: 0; transform: translateY(4px); animation: fadeInUp var(--duration-slow) var(--easing-enter) forwards; animation-delay: 0.2s; flex: none;">
                         <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; box-shadow: var(--shadow-sm); height: 100%; display: flex; flex-direction: column;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; min-height: 18px;">
-                                <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">敌方数据</h3>
+                                <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Quái phe địch</h3>
                                 <!-- 增益减益效果标签区域 - 支持横向滚动 -->
                                 <div id="other-buf-list" style="display: flex; flex-wrap: nowrap; gap: 2px; max-width: 200px; min-width: 0; overflow-x: hidden; overflow-y: hidden; padding-bottom: 4px;">
                                     <!-- Buff 标签由 JS 动态填充 -->
@@ -1517,22 +1520,22 @@
                                     <!-- 组合框 -->
                                     <div style="margin-bottom: 5px;">
                                         <select id="other-pet-select" class="input" style="width: 85px; font-size: 9.5px; padding: 4px 6px;">
-                                            <option value="0">敌方妖怪1</option>
+                                            <option value="0">Quái vật 1</option>
                                         </select>
                                     </div>
                                     
                                     <!-- 标签 -->
                                     <div style="display: flex; flex-direction: column; gap: 3px;">
                                         <div style="display: flex; align-items: center; padding: 3px 5px; background: var(--color-background-hover); border-radius: 2px; transition: all var(--duration-fast) var(--easing-standard);">
-                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">妖怪ID:</span>
+                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">ID:</span>
                                             <span id="other-spirit-id" style="font-size: 9.5px; font-weight: 400; color: var(--color-text-primary); white-space: normal; word-wrap: break-word; word-break: break-all; flex-shrink: 0; width: 40px; text-align: center;">0</span>
                                         </div>
                                         <div style="display: flex; align-items: center; padding: 3px 5px; background: var(--color-background-hover); border-radius: 2px; transition: all var(--duration-fast) var(--easing-standard);">
-                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">血量:</span>
+                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">Máu:</span>
                                             <span id="other-hp" style="font-size: 9.5px; font-weight: 400; color: var(--color-text-primary); white-space: normal; word-wrap: break-word; word-break: break-all; flex-shrink: 0; width: 40px; text-align: center;">0/0</span>
                                         </div>
                                         <div style="display: flex; align-items: center; padding: 3px 5px; background: var(--color-background-hover); border-radius: 2px; transition: all var(--duration-fast) var(--easing-standard);">
-                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">妖怪名称:</span>
+                                            <span style="font-size: 9px; color: var(--color-text-secondary); white-space: nowrap; flex-shrink: 0;">Tên:</span>
                                             <span id="other-name" style="font-size: 9.5px; font-weight: 400; color: var(--color-text-primary); white-space: normal; word-wrap: break-word; word-break: break-all; flex-shrink: 0; width: 40px; text-align: center;">未知</span>
                                         </div>
                                     </div>
@@ -1542,8 +1545,8 @@
                                 <div style="width: 190px; height: 110px; flex: none; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; background: var(--color-background); display: flex; flex-direction: column;">
                                     <!-- 列表表头 -->
                                     <div style="display: grid; grid-template-columns: 105px 75px; background: var(--color-background-hover); padding: 3px 5px; border-bottom: 1px solid var(--color-border);">
-                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">技能名称</div>
-                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">PP值</div>
+                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">Kỹ năng</div>
+                                        <div style="font-size: 9.5px; font-weight: 600; color: var(--color-text-primary); text-align: center;">PP</div>
                                     </div>
                                     
                                     <!-- 列表内容 -->
@@ -1559,55 +1562,55 @@
                     <div style="width: 230px; height: 150px; opacity: 0; transform: translateY(4px); animation: fadeInUp var(--duration-slow) var(--easing-enter) forwards; animation-delay: 0.3s; flex: none;">
                         <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; box-shadow: var(--shadow-sm); height: 100%; display: flex; flex-direction: column;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; min-height: 18px;">
-                                <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">道具</h3>
-                                <button onclick="window.refreshPackItems()" style="padding: 1px 4px; font-size: 8px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">刷新</button>
+                                <h3 style="font-size: 11.5px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Vật phẩm</h3>
+                                <button onclick="window.refreshPackItems()" style="padding: 1px 4px; font-size: 8px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">Làm mới</button>
                             </div>
                             
                             <!-- 道具选择按钮组容器（带滚动条） -->
                             <div id="item-buttons-container" style="flex: 1; overflow-y: auto; overflow-x: hidden; margin-bottom: 4px; padding-right: 2px;">
                                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;">
                                     <button class="item-btn item-btn-hp" data-id="100008" onclick="window.selectItem(100008, '小金创药', 20, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">小金创药</span>
+                                        <span class="item-name">Bình máu</span>
                                         <span style="color: #e53935; font-size: 7.5px;">+20HP <span class="item-count" data-id="100008">(0)</span></span>
                                     </button>
                                     <button class="item-btn item-btn-hp" data-id="100007" onclick="window.selectItem(100007, '中金创药', 50, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">中金创药</span>
+                                        <span class="item-name">Bình máu</span>
                                         <span style="color: #e53935; font-size: 7.5px;">+50HP <span class="item-count" data-id="100007">(0)</span></span>
                                     </button>
                                     <button class="item-btn item-btn-hp" data-id="100006" onclick="window.selectItem(100006, '大金创药', 100, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">大金创药</span>
+                                        <span class="item-name">Bình máu</span>
                                         <span style="color: #e53935; font-size: 7.5px;">+100HP <span class="item-count" data-id="100006">(0)</span></span>
                                     </button>
                                     <button class="item-btn item-btn-hp" data-id="100031" onclick="window.selectItem(100031, '活血散', 150, 'hp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">活血散</span>
+                                        <span class="item-name">Mana</span>
                                         <span style="color: #e53935; font-size: 7.5px;">+150HP <span class="item-count" data-id="100031">(0)</span></span>
                                     </button>
                                     <button class="item-btn item-btn-mp" data-id="100010" onclick="window.selectItem(100010, '小型法力药剂', 5, 'mp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">小型法力剂</span>
+                                        <span class="item-name">Mana</span>
                                         <span style="color: #1976d2; font-size: 7.5px;">+5PP <span class="item-count" data-id="100010">(0)</span></span>
                                     </button>
                                     <button class="item-btn item-btn-mp" data-id="100011" onclick="window.selectItem(100011, '中型法力药剂', 10, 'mp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">中型法力剂</span>
+                                        <span class="item-name">Mana</span>
                                         <span style="color: #1976d2; font-size: 7.5px;">+10PP <span class="item-count" data-id="100011">(0)</span></span>
                                     </button>
                                     <button class="item-btn item-btn-mp" data-id="100012" onclick="window.selectItem(100012, '大型法力药剂', 20, 'mp')" style="display: flex; flex-direction: column; align-items: center; padding: 3px 4px; font-size: 8.5px; background: #fafafa; color: #333; border: 1px solid #e0e0e0; border-radius: 3px; cursor: pointer; transition: all 0.15s ease;">
-                                        <span class="item-name">大型法力剂</span>
+                                        <span class="item-name">Mana</span>
                                         <span style="color: #1976d2; font-size: 7.5px;">+20PP <span class="item-count" data-id="100012">(0)</span></span>
                                     </button>
                                 </div>
                             </div>
                             <!-- 选中提示 -->
-                            <div id="selected-item-hint" style="font-size: 8px; color: var(--color-text-tertiary); text-align: center; padding: 2px; background: var(--color-background-secondary); border-radius: 2px;">点击选择道具</div>
+                            <div id="selected-item-hint" style="font-size: 8px; color: var(--color-text-tertiary); text-align: center; padding: 2px; background: var(--color-background-secondary); border-radius: 2px;">Nhấp để chọn vật phẩm</div>
                             
                             <!-- 操作按钮 -->
                             <div style="display: flex; gap: 4px;">
-                                <button id="buy-item-btn" onclick="window.buySelectedItem()" style="flex: 1; padding: 4px 6px; font-size: 9px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">购买</button>
-                                <button id="use-item-btn" onclick="window.useSelectedItem()" style="flex: 1; padding: 4px 6px; font-size: 9px; background: var(--color-primary); color: white; border: none; border-radius: 2px; cursor: pointer;">使用</button>
+                                <button id="buy-item-btn" onclick="window.buySelectedItem()" style="flex: 1; padding: 4px 6px; font-size: 9px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">Mua</button>
+                                <button id="use-item-btn" onclick="window.useSelectedItem()" style="flex: 1; padding: 4px 6px; font-size: 9px; background: var(--color-primary); color: white; border: none; border-radius: 2px; cursor: pointer;">Sử dụng</button>
                             </div>
                             
                             <!-- 数量输入 -->
                             <div style="display: flex; align-items: center; gap: 4px; margin-top: 4px;">
-                                <span style="font-size: 9px; color: var(--color-text-secondary);">数量:</span>
+                                <span style="font-size: 9px; color: var(--color-text-secondary);">Số lượng:</span>
                                 <input type="number" id="item-count-input" value="1" min="1" max="99" style="flex: 1; font-size: 9px; padding: 2px 4px; border: 1px solid var(--color-border); border-radius: 2px;">
                             </div>
                         </div>
@@ -1621,41 +1624,41 @@
                     <div class="panel-animate" style="flex: 1; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 6px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                             <div style="display: flex; align-items: center; gap: 6px;">
-                                <h3 style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin: 0;">妖怪列表</h3>
+                                <h3 style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Danh sách quái vật</h3>
                                 <div id="monster-count" class="badge badge-success" style="padding: 0 4px; font-size: 9px;">0</div>
                             </div>
-                            <button onclick="window.queryMonsters()" style="padding: 2px 6px; font-size: 9px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">刷新妖怪</button>
+                            <button onclick="window.queryMonsters()" style="padding: 2px 6px; font-size: 9px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer;">Làm mới</button>
                         </div>
                         
                         <!-- 妖怪列表容器 -->
                         <div style="flex: 1; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; background: var(--color-background); display: flex; flex-direction: column;">
                             <!-- 列表表头 -->
-                            <div style="display: grid; grid-template-columns: 28px 48px 28px 28px 26px 26px 24px 32px 130px 1fr; background: var(--color-background-hover); padding: 2px 4px; border-bottom: 1px solid var(--color-border); font-size: 9.5px; font-weight: 600; color: var(--color-text-primary);">
+                            <div style="display: grid; grid-template-columns: 28px 48px 28px 48px 48px 26px 24px 48px 130px 1fr; background: var(--color-background-hover); padding: 2px 4px; border-bottom: 1px solid var(--color-border); font-size: 9.5px; font-weight: 600; color: var(--color-text-primary);">
                                 <div style="text-align: center;">#</div>
-                                <div style="text-align: center;">名称</div>
+                                <div style="text-align: center;">Tên</div>
                                 <div style="text-align: center;">ID</div>
-                                <div style="text-align: center;">性别</div>
-                                <div style="text-align: center;">等级</div>
-                                <div style="text-align: center;">血量</div>
-                                <div style="text-align: center;">系别</div>
-                                <div style="text-align: center;">性格</div>
+                                <div style="text-align: center;">Giới tính</div>
+                                <div style="text-align: center;">Cấp độ</div>
+                                <div style="text-align: center;">Máu</div>
+                                <div style="text-align: center;">Hệ</div>
+                                <div style="text-align: center;">Tính cách</div>
                                 <div style="text-align: center;">资质</div>
-                                <div style="text-align: left; padding-left: 4px;">技能</div>
+                                <div style="text-align: left; padding-left: 4px;">Kỹ năng</div>
                             </div>
                             
                             <!-- 列表内容 -->
                             <div id="monster-list" style="overflow-y: auto; flex: 1; font-size: 9.5px;">
-                                <div style="text-align: center; padding: 20px; color: var(--color-text-tertiary);">暂无妖怪数据，请打开游戏妖怪背包</div>
+                                <div style="text-align: center; padding: 20px; color: var(--color-text-tertiary);">Không có dữ liệu quái vật</div>
                             </div>
                         </div>
                     </div>
                     
                     <!-- 右侧：选中妖怪详情 -->
                     <div class="panel-animate" style="width: 200px; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 6px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;">
-                        <h3 style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin: 0 0 4px 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px;">妖怪详情</h3>
+                        <h3 style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin: 0 0 4px 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px;">Chi tiết</h3>
                         
                         <div id="monster-detail" style="flex: 1; overflow-y: auto; font-size: 9px;">
-                            <div style="text-align: center; padding: 20px; color: var(--color-text-tertiary);">点击左侧妖怪查看详情</div>
+                            <div style="text-align: center; padding: 20px; color: var(--color-text-tertiary);">Nhấp vào quái vật bên trái để xem chi tiết</div>
                         </div>
                     </div>
                 </div>
@@ -1666,7 +1669,7 @@
                     <!-- 变速卡片 -->
                     <div class="panel-animate" style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 12px; box-shadow: var(--shadow-sm); width: 180px; flex-shrink: 0;">
                         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-                            <span style="font-size: 13px; font-weight: 600; color: var(--color-text-primary);">变速</span>
+                            <span style="font-size: 13px; font-weight: 600; color: var(--color-text-primary);">Tốc độ Game</span>
                             <span id="speed-value" style="font-size: 12px; font-weight: 500; color: var(--color-primary); background: rgba(0, 120, 212, 0.1); padding: 3px 8px; border-radius: 10px;">1.0X</span>
                         </div>
 
@@ -1683,12 +1686,12 @@
 
                     <!-- 自动回血卡片 -->
                     <div class="panel-animate" style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 12px; box-shadow: var(--shadow-sm); width: 140px; flex-shrink: 0; height: 99px; display: flex; flex-direction: column;">
-                        <div style="font-size: 13px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 8px;">游戏辅助</div>
+                        <div style="font-size: 13px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 8px;">Trợ lý Game</div>
 
                         <div style="display: flex; flex-direction: column; gap: 6px; justify-content: center; flex: 1;">
                             <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 10px; color: var(--color-text-primary); padding: 2px 0;">
                                 <input type="checkbox" id="auto-heal" style="width: 12px; height: 12px; cursor: pointer;" onchange="toggleAutoHeal(this.checked)">
-                                <span>自动回血</span>
+                                <span>Tự động hồi máu</span>
                             </label>
                         </div>
                     </div>
@@ -1699,8 +1702,8 @@
                 <div style="display: flex; flex-direction: column; height: 100%; gap: 6px; padding: 6px 12px 6px 12px;">
                     <!-- 顶部栏：总记录数和清空按钮 -->
                     <div style="display: flex; justify-content: space-between; align-items: center; min-height: 16px;">
-                        <span id="helper-log-count" style="font-size: 10px; color: var(--color-text-secondary);">总记录数: 0</span>
-                        <button onclick="window.clearHelperLog()" style="padding: 2px 8px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">清空日志</button>
+                        <span id="helper-log-count" style="font-size: 10px; color: var(--color-text-secondary);">Số lượng ghi chép: 0</span>
+                        <button onclick="window.clearHelperLog()" style="padding: 2px 8px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">Xoá nhật ký</button>
                     </div>
 
                     <!-- 日志列表 -->
@@ -1723,14 +1726,14 @@
             <div id="daily" class="tab-content">
                 <!-- 子选择夹导航 -->
                 <div class="sub-tabs">
-                    <button class="sub-tab-button active" onclick="openSubTab(event, 'sub-daily')">日常活动</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-latest')">最新活动</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-materials')">材料采集</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-boss')">BOSS专区</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-lingyu')">灵玉区</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-dungeon')">副本区</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-battlesix')">万妖盛会</button>
-                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-spiritcollect')">精魄系统</button>
+                    <button class="sub-tab-button active" onclick="openSubTab(event, 'sub-daily')">Hoạt động hàng ngày</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-latest')">Hoạt động mới nhất</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-materials')">Nguyên liệu</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-boss')">BOSS</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-lingyu')">Ngọc Linh</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-dungeon')">Hầm ngục</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-battlesix')">Đấu trường PVP</button>
+                    <button class="sub-tab-button" onclick="openSubTab(event, 'sub-spiritcollect')">Ấp trứng</button>
                 </div>
 
                 <!-- 子标签页内容 -->
@@ -1740,20 +1743,20 @@
                         
                         <!-- 每日模块 -->
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 140px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">每日</div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Hằng ngày</div>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2px;">
                                 <!-- 第一列 -->
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="daily-deep-dig" checked style="width: 10px; height: 10px;">
-                                    <span>深度挖宝</span>
+                                    <span>Đào kho báu</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="family-checkin" checked style="width: 10px; height: 10px;">
-                                    <span>家族考勤</span>
+                                    <span>Điểm danh bang hội</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="daily-card" checked style="width: 10px; height: 10px;">
-                                    <span>每日卡牌</span>
+                                    <span>Thẻ bài hằng ngày</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="family-report" checked style="width: 10px; height: 10px;">
@@ -1761,11 +1764,11 @@
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="daily-gift" checked style="width: 10px; height: 10px;">
-                                    <span>每日礼包</span>
+                                    <span>Quà hằng ngày</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="family-defend" checked style="width: 10px; height: 10px;">
-                                    <span>家族保卫</span>
+                                    <span>Trò chơi: Bảo vệ bang hội</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="weekly-gift" checked style="width: 10px; height: 10px;">
@@ -1773,10 +1776,10 @@
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="shop-surprise" checked style="width: 10px; height: 10px;">
-                                    <span>商城惊喜</span>
+                                    <span>Quà cửa hàng</span>
                                 </label>
                             </div>
-                            <button id="complete-daily-tasks" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px; margin-top: auto;">一键完成</button>
+                            <button id="complete-daily-tasks" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px; margin-top: auto;">Bắt đầu</button>
                         </div>
                         
                         <!-- 分隔线 -->
@@ -1784,22 +1787,22 @@
                         
                         <!-- 试炼模块 -->
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 90px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">试炼</div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Thử thách</div>
                             <div style="display: flex; flex-direction: column; gap: 2px;">
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="daily-fire-wind" style="width: 10px; height: 10px;">
-                                    <span>火风试炼</span>
+                                    <span>Thử thách lửa & gió</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="daily-fire" style="width: 10px; height: 10px;">
-                                    <span>火焰试炼</span>
+                                    <span>Thử thách của lửa</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                     <input type="checkbox" id="daily-storm" style="width: 10px; height: 10px;">
-                                    <span>风暴试炼</span>
+                                    <span>Thử thách của bão</span>
                                 </label>
                             </div>
-                            <button id="complete-trial-tasks" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px; margin-top: auto;">一键试炼</button>
+                            <button id="complete-trial-tasks" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px; margin-top: auto;">Bắt đầu</button>
                         </div>
                         
                         <!-- 分隔线 -->
@@ -1807,13 +1810,13 @@
                         
                         <!-- 跳舞大赛模块 -->
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 80px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">跳舞大赛</div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Khiêu vũ</div>
                             <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                                 <input type="checkbox" id="daily-dance" style="width: 10px; height: 10px;">
-                                <span>自动跳舞</span>
+                                <span>Tự động khiêu vũ</span>
                             </label>
-                            <div style="font-size: 9px; color: var(--color-text-secondary);">已完成: <span id="dance-count" style="color: var(--color-primary); font-weight: 600;">0</span>/3 次</div>
-                            <button id="complete-dance-tasks" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; margin-top: auto;">一键跳舞</button>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">Đã hoàn thành: <span id="dance-count" style="color: var(--color-primary); font-weight: 600;">0</span>/3 lần</div>
+                            <button id="complete-dance-tasks" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; margin-top: auto;">Bắt đầu</button>
                         </div>
                         
                         <!-- 分隔线 -->
@@ -1821,17 +1824,17 @@
                         
                         <!-- 玄塔模块 -->
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 80px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">玄塔</div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Tháp</div>
                             <div style="display: flex; flex-direction: column; gap: 3px;">
-                                <button id="one-key-xuantta" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px;">一键玄塔</button>
-                                <button id="buy-dice-18" class="btn btn-secondary" style="font-size: 9px; padding: 3px 6px;">购买18骰子</button>
+                                <button id="one-key-xuantta" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px;">Bắt đầu</button>
+                                <button id="buy-dice-18" class="btn btn-secondary" style="font-size: 9px; padding: 3px 6px;">Mua 18 viên xúc xắc</button>
                                 <div style="display: flex; align-items: center; gap: 4px; margin-top: 2px;">
                                     <input type="checkbox" id="auto-go-home" style="width: 12px; height: 12px; cursor: pointer;" onchange="toggleAutoGoHome(this.checked)">
-                                    <label for="auto-go-home" style="font-size: 9px; color: var(--color-text-secondary); cursor: pointer; user-select: none;">自动回家</label>
+                                    <label for="auto-go-home" style="font-size: 9px; color: var(--color-text-secondary); cursor: pointer; user-select: none;">Tự động về nhà</label>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 4px;">
                                     <input type="checkbox" id="block-battle" style="width: 12px; height: 12px; cursor: pointer;" onchange="toggleBlockBattle(this.checked)">
-                                    <label for="block-battle" style="font-size: 9px; color: var(--color-text-secondary); cursor: pointer; user-select: none;">屏蔽战斗</label>
+                                    <label for="block-battle" style="font-size: 9px; color: var(--color-text-secondary); cursor: pointer; user-select: none;">Chặn chiến đấu</label>
                                 </div>
                             </div>
                         </div>
@@ -1841,17 +1844,17 @@
                         
                         <!-- 福瑞宝箱模块 -->
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 120px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">福瑞宝箱</div>
-                            <div style="font-size: 8px; color: var(--color-text-tertiary);">自动福瑞 11:00-13:00 / 17:00-19:00</div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Rương kho báu</div>
+                            <div style="font-size: 8px; color: var(--color-text-tertiary);">Rương kho báu mở từ 11:00-13:00 / 17:00-19:00</div>
                             <div style="display: flex; align-items: center; gap: 4px;">
-                                <label style="font-size: 9px; color: var(--color-text-secondary);">目标:</label>
+                                <label style="font-size: 9px; color: var(--color-text-secondary);">Mục tiêu:</label>
                                 <input type="number" id="heaven-furui-max" value="30" min="1" max="30" style="width: 40px; font-size: 9px; padding: 2px 4px; border: 1px solid var(--color-border); border-radius: 2px;">
-                                <span style="font-size: 9px; color: var(--color-text-secondary);">个</span>
+                                <span style="font-size: 9px; color: var(--color-text-secondary);">rương</span>
                             </div>
-                            <div style="font-size: 9px; color: var(--color-text-secondary);">已拾取: <span id="heaven-furui-count" style="color: var(--color-primary); font-weight: 600;">0</span>/<span id="heaven-furui-target">30</span></div>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">Đã lấy: <span id="heaven-furui-count" style="color: var(--color-primary); font-weight: 600;">0</span>/<span id="heaven-furui-target">30</span></div>
                             <div style="display: flex; gap: 4px;">
-                                <button id="start-heaven-furui" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">开始</button>
-                                <button id="stop-heaven-furui" class="btn btn-secondary" style="font-size: 9px; padding: 3px 6px; flex: 1;" disabled>停止</button>
+                                <button id="start-heaven-furui" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">Bắt đầu</button>
+                                <button id="stop-heaven-furui" class="btn btn-secondary" style="font-size: 9px; padding: 3px 6px; flex: 1;" disabled>Dừng</button>
                             </div>
                         </div>
                         
@@ -1860,82 +1863,82 @@
                         
                         <!-- 坐骑大赛模块 (Act665) -->
                         <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 140px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">坐骑大赛</div>
-                            <div style="font-size: 8px; color: var(--color-text-tertiary);">多人竞速小游戏 每日50点上限</div>
-                            <div style="font-size: 9px; color: var(--color-text-secondary);">模式: 自动刷满每日骑乘点（固定临时坐骑）</div>
-                            <div style="font-size: 9px; color: var(--color-text-secondary);">可获得积分: <span id="horse-competition-points" style="color: var(--color-primary); font-weight: 600;">--</span></div>
-                            <div style="font-size: 9px; color: var(--color-text-secondary);">状态: <span id="horse-competition-status" style="color: var(--color-text-tertiary);">就绪</span></div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Đua ngựa</div>
+                            <div style="font-size: 8px; color: var(--color-text-tertiary);">Trò chơi đua ngựa nhiều người, tối đa 50 điểm mỗi ngày</div>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">Chế độ: Tự động lấp đầy điểm ngựa mỗi ngày (tạm thời cố định)</div>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">Có thể nhận điểm: <span id="horse-competition-points" style="color: var(--color-primary); font-weight: 600;">--</span></div>
+                            <div style="font-size: 9px; color: var(--color-text-secondary);">Trạng thái: <span id="horse-competition-status" style="color: var(--color-text-tertiary);">Sẵn sàng</span></div>
                             <div style="display: flex; gap: 4px;">
-                                <button id="one-key-horse-competition" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">开始</button>
-                                <button id="stop-horse-competition" class="btn" style="font-size: 9px; padding: 3px 6px; flex: 1; background: #fff4e5; color: #9a5b00; border: 1px solid #ffd08a;">停止</button>
+                                <button id="one-key-horse-competition" class="btn btn-primary" style="font-size: 9px; padding: 3px 6px; flex: 1;">Bắt đầu</button>
+                                <button id="stop-horse-competition" class="btn" style="font-size: 9px; padding: 3px 6px; flex: 1; background: #fff4e5; color: #9a5b00; border: 1px solid #ffd08a;">Dừng</button>
                             </div>
                         </div>
                         
                     </div>
                     <!-- 状态提示 -->
                     <div id="daily-task-status" style="font-size: 9px; color: var(--color-text-secondary); padding: 2px 4px; background: var(--color-background-secondary); border-radius: 2px; text-align: center; margin: 4px;">
-                        勾选需要完成的日常活动，点击对应按钮执行
+                        Chọn các hoạt động hàng ngày cần hoàn thành, nhấp vào nút bắt đầu tương ứng để thực hiện
                     </div>
                 </div>
 
                 <div id="sub-latest" class="sub-tab-content">
                     <div style="padding: 4px;">
-                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 6px;">最新活动</div>
+                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 6px;">Hoạt động mới nhất</div>
                         <!-- 活动卡片网格布局 -->
                         <div style="display: flex; flex-wrap: wrap; gap: 6px;">
                             <!-- 采摘红莓果模块 (Act788) -->
                             <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">采摘红莓果</div>
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Thu thập trái dâu đỏ</div>
                                     <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
                                         <input type="checkbox" id="strawberry-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
+                                        <span>Làm tất cả</span>
                                     </label>
-                                    <button id="one-key-strawberry" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
+                                    <button id="one-key-strawberry" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
                                 </div>
                             </div>
                             <!-- 摘取大力果实模块 (Act782) -->
                             <div style="background: #FFFFFF; border: 1px solid #E8E1D4; border-radius: 4px; padding: 8px; width: 160px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">摘取大力果实</div>
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Bắt lấy trái cây (con chuột vàng)</div>
                                     <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
                                         <input type="checkbox" id="act782-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
+                                        <span>Làm tất cả</span>
                                     </label>
-                                    <button id="one-key-act782" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
+                                    <button id="one-key-act782" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
                                 </div>
                             </div>
                             <!-- 海底激战模块 (Act653) -->
                             <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 160px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">海底激战</div>
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Trận chiến dưới nước</div>
                                     <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
                                         <input type="checkbox" id="sea-battle-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
+                                        <span>Làm tất cả</span>
                                     </label>
-                                    <button id="one-key-sea-battle" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
+                                    <button id="one-key-sea-battle" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
                                 </div>
                             </div>
                             <!-- 磐石御天火模块 (Act793) -->
                             <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">磐石御天火</div>
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Thiên đường đá lửa</div>
                                     <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
                                         <input type="checkbox" id="act793-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
+                                        <span>Làm tất cả</span>
                                     </label>
-                                    <button id="one-key-act793" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
+                                    <button id="one-key-act793" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
                                 </div>
                             </div>
                             <!-- 五行镜破封印模块 (Act791) -->
                             <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 8px; width: 150px; flex-shrink: 0;">
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <div style="font-size: 11px; font-weight: 600; color: #333;">五行镜破封印</div>
+                                    <div style="font-size: 11px; font-weight: 600; color: #333;">Phá vỡ phong ấn</div>
                                     <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 9px; color: #666;">
                                         <input type="checkbox" id="act791-sweep" style="width: 10px; height: 10px; cursor: pointer;">
-                                        <span>扫荡</span>
+                                        <span>Làm tất cả</span>
                                     </label>
-                                    <button id="one-key-act791" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">一键完成</button>
+                                    <button id="one-key-act791" class="btn btn-primary" style="font-size: 9px; padding: 3px 8px;">Bắt đầu</button>
                                 </div>
                             </div>
                         </div>
@@ -1945,7 +1948,7 @@
                 <div id="sub-materials" class="sub-tab-content">
                     <div style="background: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; width: 450px; margin-left: 5px;">
                         <!-- 标题 -->
-                        <div style="font-size: 12px; font-weight: 700; color: #333333; margin-bottom: 5px;">每日采集</div>
+                        <div style="font-size: 12px; font-weight: 700; color: #333333; margin-bottom: 5px;">Đào khoáng</div>
                         
                         <!-- 复选框列表 -->
                         <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px 3px; margin-bottom: 5px;">
@@ -2022,9 +2025,9 @@
                         
                         <!-- 操作按钮 -->
                         <div style="display: flex; justify-content: flex-end; gap: 6px; margin-top: auto;">
-                            <button onclick="selectAllCollect(true)" style="background: #FFFFFF; color: #333333; border: 1px solid #CCCCCC; border-radius: 3px; padding: 4px 10px; font-size: 10px; font-weight: 500; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background='#FFFFFF'">全选</button>
-                            <button onclick="selectAllCollect(false)" style="background: #FFFFFF; color: #333333; border: 1px solid #CCCCCC; border-radius: 3px; padding: 4px 10px; font-size: 10px; font-weight: 500; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background='#FFFFFF'">全不选</button>
-                            <button onclick="startOneKeyCollect()" style="background: var(--color-primary); color: #FFFFFF; border: none; border-radius: 3px; padding: 4px 12px; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='var(--color-primary-hover)'" onmouseout="this.style.background='var(--color-primary)'" onmousedown="this.style.background='var(--color-primary-pressed)'" onmouseup="this.style.background='var(--color-primary-hover)'">一键采集</button>
+                            <button onclick="selectAllCollect(true)" style="background: #FFFFFF; color: #333333; border: 1px solid #CCCCCC; border-radius: 3px; padding: 4px 10px; font-size: 10px; font-weight: 500; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background='#FFFFFF'">Chọn tất cả</button>
+                            <button onclick="selectAllCollect(false)" style="background: #FFFFFF; color: #333333; border: 1px solid #CCCCCC; border-radius: 3px; padding: 4px 10px; font-size: 10px; font-weight: 500; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background='#FFFFFF'">Bỏ chọn tất cả</button>
+                            <button onclick="startOneKeyCollect()" style="background: var(--color-primary); color: #FFFFFF; border: none; border-radius: 3px; padding: 4px 12px; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='var(--color-primary-hover)'" onmouseout="this.style.background='var(--color-primary)'" onmousedown="this.style.background='var(--color-primary-pressed)'" onmouseup="this.style.background='var(--color-primary-hover)'">Bắt đầu</button>
                         </div>
                     </div>
                 </div>
@@ -2033,19 +2036,19 @@
                     <!-- BOSS对战卡片 -->
                     <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px;">
                         <div class="panel-animate" style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 10px; box-shadow: var(--shadow-sm); width: 100%; max-width: 340px; min-width: 280px;">
-                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 8px;">boss对战</div>
+                            <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 8px;">Trận chiến BOSS</div>
                             
                             <!-- 下拉选择框和按钮 -->
                             <div style="display: flex; gap: 8px; align-items: center;">
                                 <!-- 搜索框 + select组合 -->
                                 <div style="display: flex; gap: 4px; flex: 1;">
-                                    <input type="text" id="boss-search-input" placeholder="搜索..."
+                                    <input type="text" id="boss-search-input" placeholder="Tìm kiếm..."
                                         style="width: 80px; padding: 5px 8px; font-size: 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); outline: none; transition: all var(--duration-normal) var(--easing-standard); background: var(--color-background); color: var(--color-text-primary);"
                                         oninput="filterBossSelect()">
                                     <select id="boss-select"
                                         style="flex: 1; padding: 5px 10px; font-size: 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); outline: none; transition: all var(--duration-normal) var(--easing-standard); background: var(--color-background); color: var(--color-text-primary); cursor: pointer;"
                                         onchange="selectBoss(this.value)">
-                                        <option value="0">-- 请选择BOSS --</option>
+                                        <option value="0">-- Chọn BOSS --</option>
                                         <!-- Boss选项由JS动态填充 -->
                                     </select>
                                 </div>
@@ -2055,13 +2058,13 @@
                                     style="padding: 4px 12px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: 2px; cursor: pointer; transition: all 0.2s linear; white-space: nowrap;"
                                     onmouseover="this.style.background='var(--color-primary-hover)'" 
                                     onmouseout="this.style.background='var(--color-primary)'">
-                                    进入战斗
+                                    Vào chiến đấu
                                 </button>
                             </div>
                             
                             <!-- 当前选中的BOSS信息 -->
                             <div id="selected-boss-info" style="margin-top: 8px; font-size: 9px; color: var(--color-text-secondary);">
-                                请选择一个BOSS
+                                Chọn BOSS để hiển thị thông tin chi tiết
                             </div>
                         </div>
                     </div>
@@ -2073,78 +2076,78 @@
                         <div style="flex: 1.1; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 3px; padding: 6px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; min-width: 0;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; padding: 0 2px;">
                                 <div style="display: flex; align-items: center; gap: 6px;">
-                                    <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">灵玉列表</h3>
+                                    <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Danh sách Ngọc Linh</h3>
                                     <div id="lingyu-count" class="badge badge-success" style="padding: 1px 6px; font-size: 10px;">0</div>
                                 </div>
                                 <!-- 排序与筛选控制区 -->
                                 <div style="display: flex; align-items: center; gap: 4px;">
                                     <select id="lingyu-sort-attr" style="font-size: 10px; padding: 1px 4px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; height: 20px; background: var(--color-background);">
-                                        <option value="none">不排序</option>
-                                        <option value="体力">体力</option>
-                                        <option value="攻击">攻击</option>
-                                        <option value="防御">防御</option>
-                                        <option value="法术">法术</option>
-                                        <option value="抗性">抗性</option>
-                                        <option value="速度">速度</option>
-                                        <option value="威力">威力</option>
+                                        <option value="none">Không sắp xếp</option>
+                                        <option value="体力">Máu</option>
+                                        <option value="攻击">Tấn công</option>
+                                        <option value="防御">Giáp</option>
+                                        <option value="法术">Phép</option>
+                                        <option value="抗性">Kháng</option>
+                                        <option value="速度">Tốc độ</option>
+                                        <option value="威力">Sức mạnh</option>
                                     </select>
-                                    <button onclick="window.applyLingyuSort()" style="padding: 1px 8px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: 2px; cursor: pointer; height: 20px;">排序</button>
-                                    <button onclick="window.queryLingyu()" style="padding: 1px 8px; font-size: 10px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer; height: 20px;">查询灵玉</button>
+                                    <button onclick="window.applyLingyuSort()" style="padding: 1px 8px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: 2px; cursor: pointer; height: 20px;">Sắp xếp</button>
+                                    <button onclick="window.queryLingyu()" style="padding: 1px 8px; font-size: 10px; background: #2e7d32; color: white; border: none; border-radius: 2px; cursor: pointer; height: 20px;">Tìm kiếm</button>
                                 </div>
                             </div>
                             
                             <!-- 灵玉列表容器 -->
                             <div style="flex: 1; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; background: var(--color-background); display: flex; flex-direction: column;">
                                 <!-- 列表表头 -->
-                                <div style="display: grid; grid-template-columns: 55px 40px 65px 1fr; background: var(--color-background-hover); padding: 3px 6px; border-bottom: 1px solid var(--color-border); font-size: 10px; font-weight: 600; color: var(--color-text-primary);">
-                                    <div style="text-align: center;">名称</div>
-                                    <div style="text-align: center;">索引</div>
-                                    <div style="text-align: center;">宠物</div>
-                                    <div style="text-align: center;">附加属性</div>
+                                <div style="display: grid; grid-template-columns: 55px 40px 105px 1fr; background: var(--color-background-hover); padding: 3px 6px; border-bottom: 1px solid var(--color-border); font-size: 10px; font-weight: 600; color: var(--color-text-primary);">
+                                    <div style="text-align: center;">Tên</div>
+                                    <div style="text-align: center;">Chỉ số</div>
+                                    <div style="text-align: center;">Pét đang giữ</div>
+                                    <div style="text-align: center;">Thuộc tính</div>
                                 </div>
                                 
                                 <!-- 列表内容 -->
                                 <div id="lingyu-list" style="overflow-y: auto; flex: 1; font-size: 10px; min-height: 214px; max-height: 214px;">
-                                    <div style="text-align: center; padding: 10px; color: var(--color-text-tertiary);">暂无数据</div>
+                                    <div style="text-align: center; padding: 10px; color: var(--color-text-tertiary);">Không có dữ liệu</div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- 右侧：分解队列面板 (约占 1/2) -->
                         <div style="flex: 0.9; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 3px; padding: 6px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 5px; min-width: 0;">
-                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px;">分解队列</h3>
+                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px;">Phân rã hàng đợi</h3>
                             
                             <!-- 已添加到分解队列的灵玉列表 -->
                             <div id="decompose-queue-list" style="flex: 1; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; background: var(--color-background); display: flex; flex-direction: column; margin-bottom: 4px;">
                                 <!-- 列表表头 -->
                                 <div style="display: grid; grid-template-columns: 45px 1fr; background: var(--color-background-hover); padding: 3px 6px; border-bottom: 1px solid var(--color-border); font-size: 10px; font-weight: 600; color: var(--color-text-primary);">
                                     <div style="text-align: center;">#</div>
-                                    <div style="text-align: center;">灵玉名称</div>
+                                    <div style="text-align: center;">Tên Ngọc Linh</div>
                                 </div>
                                 <!-- 列表内容 -->
                                 <div id="decompose-list" style="overflow-y: auto; flex: 1; font-size: 10px; min-height: 145px; max-height: 145px;">
-                                    <div style="text-align: center; padding: 10px; color: var(--color-text-tertiary);">未添加灵玉</div>
+                                    <div style="text-align: center; padding: 10px; color: var(--color-text-tertiary);">Không có Ngọc Linh</div>
                                 </div>
                             </div>
 
                             <!-- 操作按钮组 -->
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
-                                <button onclick="window.decomposeAllInQueue()" class="btn btn-primary" style="margin: 0; font-size: 11px; height: 24px; padding: 0; line-height: 24px;">一键分解</button>
-                                <button onclick="window.clearDecomposeQueue()" class="btn btn-secondary" style="margin: 0; font-size: 11px; height: 24px; padding: 0; line-height: 24px;">清空队列</button>
+                                <button onclick="window.decomposeAllInQueue()" class="btn btn-primary" style="margin: 0; font-size: 11px; height: 24px; padding: 0; line-height: 24px;">Bắt đầu</button>
+                                <button onclick="window.clearDecomposeQueue()" class="btn btn-secondary" style="margin: 0; font-size: 11px; height: 24px; padding: 0; line-height: 24px;">Xóa hàng đợi</button>
                             </div>
 
                             <!-- 统计信息 -->
                             <div style="font-size: 10px; color: var(--color-text-secondary); padding: 3px 6px; background: var(--color-background-secondary); border-radius: 2px;">
-                                <span id="decompose-queue-count">已添加: 0 个灵玉</span>
+                                <span id="decompose-queue-count">Đã thêm: 0 Ngọc Linh</span>
                             </div>
 
                             <div class="divider" style="margin: 3px 0;"></div>
                             
                             <!-- 提示区域 -->
                             <div style="font-size: 10px; color: var(--color-text-tertiary); line-height: 1.4;">
-                                <div>• 从左侧列表选择灵玉添加到分解队列</div>
-                                <div>• 多个灵玉可一次性分解</div>
-                                <div>• 分解后无法找回，请谨慎</div>
+                                <div>• Chọn Ngọc Linh từ danh sách bên trái để thêm vào hàng đợi phân hủy</div>
+                                <div>• Nhiều Ngọc Linh có thể phân hủy một lần</div>
+                                <div>• Sau khi phân hủy, không thể tìm lại, vui lòng cẩn thận</div>
                             </div>
                         </div>
                     </div>
@@ -2156,23 +2159,23 @@
                     
                     <!-- 副本跳层模块 -->
                     <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 130px;">
-                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">副本跳层</div>
+                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Hầm ngục</div>
                         
                         <!-- 层数输入 -->
                         <div style="display: flex; align-items: center; gap: 4px;">
-                            <label for="dungeon-layer-input" style="font-size: 9px; color: var(--color-text-secondary);">目标层数:</label>
+                            <label for="dungeon-layer-input" style="font-size: 9px; color: var(--color-text-secondary);">Bắt đầu từ:</label>
                             <input type="number" id="dungeon-layer-input" value="1" min="1" max="9999" 
                                 style="width: 50px; font-size: 9px; padding: 2px 4px; border: 1px solid var(--color-border); border-radius: 2px;">
-                            <span style="font-size: 8px; color: var(--color-text-tertiary);">层</span>
+                            <span style="font-size: 8px; color: var(--color-text-tertiary);">tầng</span>
                         </div>
                         
                         <!-- 说明文本 -->
-                        <div style="font-size: 8px; color: var(--color-text-tertiary);">需50级以下妖怪</div>
+                        <div style="font-size: 8px; color: var(--color-text-tertiary);">Cần Pét 50 cấp hoặc thấp hơn</div>
                         
                         <!-- 操作按钮 -->
                         <div style="display: flex; gap: 4px; margin-top: auto;">
-                            <button id="dungeon-jump-btn" onclick="startDungeonJump()" class="btn btn-primary" style="width: 55px; font-size: 9px; padding: 3px 6px;">跳层</button>
-                            <button id="dungeon-stop-btn" onclick="stopDungeonJump()" class="btn btn-secondary" style="width: 55px; font-size: 9px; padding: 3px 6px;">停止</button>
+                            <button id="dungeon-jump-btn" onclick="startDungeonJump()" class="btn btn-primary" style="width: 55px; font-size: 9px; padding: 3px 6px;">Bắt đầu</button>
+                            <button id="dungeon-stop-btn" onclick="stopDungeonJump()" class="btn btn-secondary" style="width: 55px; font-size: 9px; padding: 3px 6px;">Dừng</button>
                         </div>
                     </div>
                     
@@ -2181,38 +2184,38 @@
                     
                     <!-- 双台谷刷级模块 -->
                     <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; min-width: 180px;">
-                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">双台谷刷级</div>
+                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Hầm ngục</div>
                         
                         <!-- 妖怪选择 -->
                         <div style="display: flex; align-items: center; gap: 4px;">
-                            <label style="font-size: 9px; color: var(--color-text-secondary); min-width: 35px;">主宠:</label>
+                            <label style="font-size: 9px; color: var(--color-text-secondary); min-width: 35px;">Pét chính:</label>
                             <select id="shuangtai-pet" style="width: 100px; font-size: 9px; padding: 2px; border: 1px solid var(--color-border); border-radius: 2px; height: 18px;" disabled>
-                                <option value="">请先查询</option>
+                                <option value="">Vui lòng tìm kiếm trước</option>
                             </select>
-                            <button id="query-shuangtai" class="btn btn-secondary" style="width: 45px; font-size: 9px; padding: 2px 4px;">查询</button>
+                            <button id="query-shuangtai" class="btn btn-secondary" style="width: 45px; font-size: 9px; padding: 2px 4px;">Tìm kiếm</button>
                         </div>
                         
                         <!-- 技能选择 -->
                         <div style="display: flex; align-items: center; gap: 4px;">
-                            <label style="font-size: 9px; color: var(--color-text-secondary); min-width: 35px;">技能:</label>
+                            <label style="font-size: 9px; color: var(--color-text-secondary); min-width: 35px;">Kỹ năng:</label>
                             <select id="shuangtai-skill" style="width: 145px; font-size: 9px; padding: 2px; border: 1px solid var(--color-border); border-radius: 2px; height: 18px;" disabled>
-                                <option value="">自动选择最高威力</option>
+                                <option value="">Tự động chọn kỹ năng mạnh nhất</option>
                             </select>
                         </div>
                         
                         <!-- 屏蔽战斗选项 -->
                         <label style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px; cursor: pointer; font-size: 9px;">
                             <input type="checkbox" id="shuangtai-block-battle" style="width: 10px; height: 10px;">
-                            <span>屏蔽战斗</span>
+                            <span>Che khuất trận chiến</span>
                         </label>
                         
                         <!-- 说明文本 -->
-                        <div style="font-size: 8px; color: var(--color-text-tertiary);">主宠末位，至少2只妖怪</div>
+                        <div style="font-size: 8px; color: var(--color-text-tertiary);">Pét chính cuối cùng, ít nhất 2 con Pét</div>
                         
                         <!-- 操作按钮 -->
                         <div style="display: flex; gap: 4px; margin-top: auto;">
-                            <button id="start-shuangtai" class="btn btn-primary" style="width: 55px; font-size: 9px; padding: 3px 6px;" disabled>启动</button>
-                            <button id="stop-shuangtai" class="btn btn-secondary" style="width: 55px; font-size: 9px; padding: 3px 6px;" disabled>停止</button>
+                            <button id="start-shuangtai" class="btn btn-primary" style="width: 55px; font-size: 9px; padding: 3px 6px;" disabled>Bắt đầu</button>
+                            <button id="stop-shuangtai" class="btn btn-secondary" style="width: 55px; font-size: 9px; padding: 3px 6px;" disabled>Dừng</button>
                         </div>
                     </div>
                     
@@ -2224,24 +2227,24 @@
                 <div style="display: flex; gap: 12px; height: 100%; padding: 4px;">
                     <!-- 左侧：功能操作区 -->
                     <div style="display: flex; flex-direction: column; gap: 6px; min-width: 160px;">
-                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">万妖盛会PVP</div>
+                        <div style="font-size: 11px; font-weight: 600; color: var(--color-text-primary);">Đấu trường PVP</div>
                         
                         <!-- 匹配次数设置 -->
                         <div style="display: flex; align-items: center; gap: 6px;">
-                            <label for="battlesix-match-count" style="font-size: 10px; color: var(--color-text-primary); min-width: 70px;">匹配次数：</label>
+                            <label for="battlesix-match-count" style="font-size: 10px; color: var(--color-text-primary); min-width: 70px;">Số lần khớp:</label>
                             <input type="number" id="battlesix-match-count" value="1" min="1" max="999" class="input" style="width: 60px; font-size: 10px; padding: 3px 5px;">
                         </div>
 
                         <!-- 匹配控制 -->
                         <div style="display: flex; gap: 6px;">
-                            <button id="battlesix-auto-match" class="btn btn-primary" style="font-size: 10px; padding: 4px 8px;">自动匹配</button>
-                            <button id="battlesix-cancel-match" class="btn btn-secondary" style="font-size: 10px; padding: 4px 8px;">取消匹配</button>
+                            <button id="battlesix-auto-match" class="btn btn-primary" style="font-size: 10px; padding: 4px 8px;">Tự động khớp</button>
+                            <button id="battlesix-cancel-match" class="btn btn-secondary" style="font-size: 10px; padding: 4px 8px;">Hủy khớp</button>
                         </div>
 
                         <!-- 自动战斗设置 -->
                         <div style="display: flex; align-items: center; gap: 2px; padding: 2px 4px; background: #FFFFFF; border-radius: 2px;">
                             <input type="checkbox" id="battlesix-auto-battle" style="width: 10px; height: 10px;">
-                            <label for="battlesix-auto-battle" style="font-size: 9px; cursor: pointer;">自动战斗</label>
+                            <label for="battlesix-auto-battle" style="font-size: 9px; cursor: pointer;">Tự động chiến đấu</label>
                         </div>
                     </div>
                     
@@ -2252,11 +2255,11 @@
                     <div style="flex: 1;">
                         <div style="font-size: 10px; font-weight: 600; color: var(--color-text-secondary); margin-bottom: 4px;">功能说明</div>
                         <div style="font-size: 9px; color: var(--color-text-tertiary); line-height: 1.5;">
-                            <div>• 自动匹配后进入战斗</div>
+                            <div>• Sau khi khớp, vào chiến đấu</div>
                             <div>• 自动战斗会自动选择技能</div>
-                            <div>• 精灵死亡时自动切换</div>
-                            <div>• 战斗结束后自动确认</div>
-                            <div>• 支持多次自动匹配循环</div>
+                            <div>• Khi Pét chết, tự động chuyển</div>
+                            <div>• Sau khi chiến đấu, tự động xác nhận</div>
+                            <div>• Hỗ trợ nhiều lần khớp tự động</div>
                         </div>
                     </div>
                 </div>
@@ -2268,28 +2271,28 @@
                     <div class="spirit-giving-panel">
                         <div class="spirit-giving-header">
                             <div class="spirit-stats">
-                                <span class="spirit-stat-chip">今日可赠 <span id="spirit-daily-out" style="color: var(--color-primary); font-weight: 600;">-</span></span>
-                                <span class="spirit-stat-chip">本周可赠 <span id="spirit-weekly-out" style="color: var(--color-primary); font-weight: 600;">-</span></span>
+                                <span class="spirit-stat-chip">Hôm nay có thể cho <span id="spirit-daily-out" style="color: var(--color-primary); font-weight: 600;">-</span></span>
+                                <span class="spirit-stat-chip">Tuần này có thể cho <span id="spirit-weekly-out" style="color: var(--color-primary); font-weight: 600;">-</span></span>
                             </div>
                             <div class="spirit-giving-actions">
-                                <button onclick="refreshSpiritPanel()" class="btn btn-secondary">刷新</button>
-                                <button onclick="getSpiritRecord(1)" class="btn btn-secondary">赠送记录</button>
-                                <button onclick="getSpiritRecord(2)" class="btn btn-secondary">接收记录</button>
+                                <button onclick="refreshSpiritPanel()" class="btn btn-secondary">Làm mới</button>
+                                <button onclick="getSpiritRecord(1)" class="btn btn-secondary">Ghi chép cho</button>
+                                <button onclick="getSpiritRecord(2)" class="btn btn-secondary">Ghi chép nhận</button>
                             </div>
                         </div>
 
                         <div id="spirit-list">
-                            <div style="color: var(--color-text-tertiary); text-align: center; padding: 20px 8px;">点击“刷新”加载精魄列表</div>
+                            <div style="color: var(--color-text-tertiary); text-align: center; padding: 20px 8px;">Nhấp vào "Làm mới" để tải danh sách Ấp trứng</div>
                         </div>
 
                         <div class="spirit-selected-line">
-                            已选精魄: <span id="spirit-selected" style="color: var(--color-primary); font-weight: 600;">无</span>
+                            Đã chọn Ấp trứng: <span id="spirit-selected" style="color: var(--color-primary); font-weight: 600;">Không có</span>
                         </div>
 
                         <div class="spirit-send-row">
-                            <label class="spirit-send-label">卡布号:</label>
-                            <input type="text" id="spirit-friend-id" placeholder="输入对方卡布号">
-                            <button onclick="verifyAndSendSpirit()" class="btn btn-primary spirit-send-button">赠送精魄</button>
+                            <label class="spirit-send-label">Số thứ tự:</label>
+                            <input type="text" id="spirit-friend-id" placeholder="Nhập số thứ tự của người khác">
+                            <button onclick="verifyAndSendSpirit()" class="btn btn-primary spirit-send-button">Cho Ấp trứng</button>
                         </div>
 
                         <div class="spirit-status-line" id="spirit-status"></div>
@@ -2297,11 +2300,11 @@
 
                     <div class="spirit-record-side">
                         <div class="spirit-record-header">
-                            <div class="spirit-record-title">记录面板</div>
-                            <div id="spirit-record-title" class="spirit-record-subtitle">等待加载</div>
+                            <div class="spirit-record-title">Ghi chép</div>
+                            <div id="spirit-record-title" class="spirit-record-subtitle">Đang tải</div>
                         </div>
                         <div id="spirit-record-panel" class="spirit-record-body">
-                            点击右上角按钮查看赠送记录或接收记录。
+                            Nhấp vào nút ở trên cùng để xem ghi chép cho hoặc nhận.
                         </div>
                     </div>
                 </div>
@@ -2315,20 +2318,20 @@
                     <!-- 拦截类型（第一列） -->
                     <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; width: 120px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">拦截类型</h3>
+                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Kiểm tra gói tin</h3>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 4px;">
                             <div style="display: flex; align-items: center; gap: 5px;">
                                 <input type="checkbox" id="intercept-send" checked style="width: 12px; height: 12px;">
-                                <label for="intercept-send" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">发送包</label>
+                                <label for="intercept-send" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">Gói tin gửi</label>
                             </div>
                             <div style="display: flex; align-items: center; gap: 5px;">
                                 <input type="checkbox" id="intercept-receive" style="width: 12px; height: 12px;">
-                                <label for="intercept-receive" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">接收包</label>
+                                <label for="intercept-receive" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">Gói tin nhận</label>
                             </div>
                             <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 4px;">
-                                <button id="start-intercept" style="padding: 4px 5px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">开始拦截</button>
-                                <button id="stop-intercept" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">停止拦截</button>
+                                <button id="start-intercept" style="padding: 4px 5px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">Bắt đầu kiểm tra</button>
+                                <button id="stop-intercept" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">Dừng kiểm tra</button>
                             </div>
                         </div>
                     </div>
@@ -2336,20 +2339,20 @@
                     <!-- 发送设置（第二列） -->
                     <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; width: 140px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">发送设置</h3>
+                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Cài đặt gửi</h3>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 4px;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <label for="send-count" style="font-size: 10px; color: var(--color-text-primary);">发送次数:</label>
+                                <label for="send-count" style="font-size: 10px; color: var(--color-text-primary);">Số lần gửi:</label>
                                 <input type="number" id="send-count" value="1" min="1" class="input" style="width: 40px; font-size: 10px; padding: 3px 5px;">
                             </div>
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <label for="send-delay" style="font-size: 10px; color: var(--color-text-primary);">发送延迟:</label>
+                                <label for="send-delay" style="font-size: 10px; color: var(--color-text-primary);">Độ trễ:</label>
                                 <input type="number" id="send-delay" value="300" min="0" class="input" style="width: 40px; font-size: 10px; padding: 3px 5px;">
                             </div>
                             <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 4px;">
-                                <button id="start-send" style="padding: 4px 5px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">开始发送</button>
-                                <button id="stop-send" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">停止发送</button>
+                                <button id="start-send" style="padding: 4px 5px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">Bắt đầu gửi</button>
+                                <button id="stop-send" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard); width: 100%;">Dừng gửi</button>
                             </div>
                         </div>
                     </div>
@@ -2357,38 +2360,38 @@
                     <!-- 高级功能（第三列） -->
                     <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; width: 130px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">高级功能</h3>
+                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Tính năng nâng cao</h3>
                         </div>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
-                            <button id="toggle-packet-window" style="padding: 4px 5px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">显示封包</button>
-                            <button id="clear-all-packets" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">清空封包</button>
+                            <button id="toggle-packet-window" style="padding: 4px 5px; font-size: 10px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">Hiển thị gói tin</button>
+                            <button id="clear-all-packets" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">Xoá gói tin</button>
                             <div style="margin: 4px 0; padding: 4px 5px; background: var(--color-background-hover); border-radius: var(--radius-sm); font-size: 10px; color: var(--color-text-secondary); text-align: center; grid-column: 1 / -1;">
-                                <div>当前封包个数: <span id="packet-count">0</span></div>
+                                <div>Số lượng gói tin hiện tại: <span id="packet-count">0</span></div>
                             </div>
-                            <button id="save-packets" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">保存封包</button>
-                            <button id="load-packets" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">载入封包</button>
+                            <button id="save-packets" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">Lưu gói tin</button>
+                            <button id="load-packets" style="padding: 4px 5px; font-size: 10px; background: var(--color-background); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; transition: all var(--duration-fast) var(--easing-standard);">Tải gói tin</button>
                         </div>
                     </div>
                     
                     <!-- 劫持修改（第四列） -->
                     <div style="background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px; width: 240px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; flex-shrink: 0;">
                         <div style="margin-bottom: 6px;">
-                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">劫持修改</h3>
+                            <h3 style="font-size: 12px; font-weight: 600; color: var(--color-text-primary); margin: 0;">Chặn & Thay Thế</h3>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 4px;">
                             <div style="display: flex; align-items: center; gap: 5px;">
                                 <input type="checkbox" id="hijack-send" checked style="width: 12px; height: 12px;">
-                                <label for="hijack-send" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">劫持发送</label>
+                                <label for="hijack-send" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">Chặn gửi</label>
                                 <input type="checkbox" id="hijack-recv" checked style="width: 12px; height: 12px;">
-                                <label for="hijack-recv" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">劫持接收</label>
+                                <label for="hijack-recv" style="font-size: 10px; color: var(--color-text-primary); cursor: pointer;">Chặn nhận</label>
                             </div>
                             <div style="display: flex; flex-direction: column; gap: 4px;">
-                                <input type="text" id="hijack-pattern" placeholder="检测文本（十六进制）" style="width: 100%; font-size: 9px; padding: 3px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-sizing: border-box;">
-                                <input type="text" id="hijack-replace" placeholder="替换文本" style="width: 100%; font-size: 9px; padding: 3px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-sizing: border-box;">
+                                <input type="text" id="hijack-pattern" placeholder="Kiểm tra văn bản (hex)" style="width: 100%; font-size: 9px; padding: 3px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-sizing: border-box;">
+                                <input type="text" id="hijack-replace" placeholder="Thay thế văn bản" style="width: 100%; font-size: 9px; padding: 3px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-sizing: border-box;">
                             </div>
                             <select id="hijack-type" style="width: 100%; font-size: 10px; padding: 3px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
-                                <option value="block">拦截</option>
-                                <option value="replace">替换</option>
+                                <option value="block">Chặn</option> 
+                                <option value="replace">Thay thế</option>
                             </select>
                         </div>
                     </div>
@@ -3485,7 +3488,7 @@
 
             // 更新统计信息
             if (logCount) {
-                logCount.textContent = '总记录数: ' + window.helperLogData.length;
+                logCount.textContent = 'Số lượng ghi chép: ' + window.helperLogData.length;
             }
         };
 
@@ -4898,7 +4901,7 @@
                 window.chrome.webview.postMessage({
                     type: 'refresh_pack_items'
                 });
-                window.updateHelperText('正在刷新背包...');
+                window.updateHelperText('Đang làm mới túi đồ...');
             }
         };
 
@@ -4960,7 +4963,7 @@
             }
             
             var typeText = type === 'mp' ? 'PP' : 'HP';
-            window.updateHelperText('已选择: ' + itemName + ' (效果: +' + value + typeText + ')');
+            window.updateHelperText('Đã chọn: ' + itemName + ' (hiệu quả: +' + value + typeText + ')');
         };
 
         /**
@@ -4968,7 +4971,7 @@
          */
         window.buySelectedItem = function() {
             if (!window.selectedItemId) {
-                window.updateHelperText('请先选择要购买的道具');
+                window.updateHelperText('Vui lòng chọn mặt hàng bạn muốn mua trước.');
                 return;
             }
             
@@ -4981,7 +4984,7 @@
                     itemId: window.selectedItemId,
                     count: count
                 });
-                window.updateHelperText('正在购买: ' + window.selectedItemName + ' x' + count);
+                window.updateHelperText('Mua: ' + window.selectedItemName + ' x' + count);
             }
         };
 
@@ -4990,7 +4993,7 @@
          */
         window.useSelectedItem = function() {
             if (!window.selectedItemId) {
-                window.updateHelperText('请先选择要使用的道具');
+                window.updateHelperText('Vui lòng chọn vật phẩm để sử dụng');
                 return;
             }
             
@@ -5003,7 +5006,7 @@
                     itemId: window.selectedItemId,
                     count: count
                 });
-                window.updateHelperText('正在使用: ' + window.selectedItemName);
+                window.updateHelperText('Đang sử dụng: ' + window.selectedItemName);
             }
         };
         
@@ -5022,7 +5025,7 @@
                 window.bossList = Array.isArray(bossData) ? bossData : (bossData.bosses || []);
                 window.renderBossSelect();
             } catch (e) {
-                console.error('解析BOSS数据失败:', e);
+                console.error('Lỗi khi phân tích dữ liệu BOSS:', e);
             }
         };
 
@@ -5048,7 +5051,7 @@
             // 添加默认选项
             const defaultOption = document.createElement('option');
             defaultOption.value = '0';
-            defaultOption.textContent = '-- 请选择BOSS --';
+            defaultOption.textContent = '-- Chọn BOSS --';
             select.appendChild(defaultOption);
 
             // 添加BOSS选项
@@ -5085,7 +5088,7 @@
             // 添加默认选项
             const defaultOption = document.createElement('option');
             defaultOption.value = '0';
-            defaultOption.textContent = '-- 请选择BOSS --';
+            defaultOption.textContent = '-- Chọn BOSS --';
             select.appendChild(defaultOption);
 
             // 过滤并添加BOSS选项
@@ -5119,7 +5122,7 @@
             const info = document.getElementById('selected-boss-info');
 
             if (bossIdNum === 0) {
-                if (info) info.textContent = '请选择一个BOSS';
+                if (info) info.textContent = 'Vui lòng chọn BOSS';
                 return;
             }
 
@@ -5127,7 +5130,7 @@
             const boss = window.bossList.find(b => b.id === bossIdNum);
             if (boss) {
                 if (info) {
-                    info.innerHTML = `已选择: <span style="color: var(--color-primary); font-weight: 600;">${boss.name}</span> (ID: ${boss.id})`;
+                    info.innerHTML = `Đã chọn: <span style="color: var(--color-primary); font-weight: 600;">${boss.name}</span> (ID: ${boss.id})`;
                 }
 
                 // 设置标志位，防止清空搜索框时触发过滤
@@ -5147,7 +5150,7 @@
                     // 添加默认选项
                     const defaultOption = document.createElement('option');
                     defaultOption.value = '0';
-                    defaultOption.textContent = '-- 请选择BOSS --';
+                    defaultOption.textContent = '-- Chọn BOSS --';
                     select.appendChild(defaultOption);
 
                     // 添加所有BOSS选项
@@ -5175,7 +5178,7 @@
         window.enterBossBattle = function() {
             if (window.selectedBossId === 0) {
                 if (window.updateHelperText) {
-                    window.updateHelperText('请先选择一个BOSS');
+                    window.updateHelperText('Vui lòng chọn BOSS');
                 }
                 return;
             }
@@ -5188,7 +5191,7 @@
                 
                 if (window.updateHelperText) {
                     const boss = window.bossList.find(b => b.id === window.selectedBossId);
-                    window.updateHelperText(`正在进入BOSS战斗: ${boss ? boss.name : window.selectedBossId}`);
+                    window.updateHelperText(`Đang vào chiến đấu BOSS: ${boss ? boss.name : window.selectedBossId}`);
                 }
             }
         };
@@ -5317,11 +5320,11 @@
             const targetLayer = layerInput ? parseInt(layerInput.value) || 1 : 1;
             
             if (targetLayer < 1 || targetLayer > 9999) {
-                updateDungeonStatus('错误：层数必须在1-9999之间', 'error');
+                updateDungeonStatus('Lỗi: Mức phải nằm trong khoảng 1-9999', 'error');
                 return;
             }
             
-            updateDungeonStatus('开始执行副本跳层到第' + targetLayer + '层...', 'info');
+            updateDungeonStatus('Bắt đầu thực hiện nhảy tầng hầm ngục đến tầng' + targetLayer + '...', 'info');
             
             if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
                 window.chrome.webview.postMessage({
@@ -5332,7 +5335,7 @@
         }
         
         function stopDungeonJump() {
-            updateDungeonStatus('停止副本跳层', 'info');
+            updateDungeonStatus('Dừng nhảy tầng hầm ngục', 'info');
             
             if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
                 window.chrome.webview.postMessage({
@@ -5804,7 +5807,7 @@
                 };
             }
 
-            renderSpiritRecord('点击右上角按钮查看赠送记录或接收记录。', '等待加载');
+            renderSpiritRecord('Nhấp vào nút ở góc trên bên phải để xem hồ sơ tặng hoặc nhận quà.', 'Đang chờ tải');
         });
 
     </script>
